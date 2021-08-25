@@ -7,9 +7,16 @@ import pandas as pd
 import sklearn.metrics as metrics
 from sklearn import preprocessing
 from sklearn.datasets import fetch_openml
+from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 from functools import partial
 
 import xgboost as xgb
+
+VERITAS_SUPPORT = False
+try: 
+    import veritas
+    VERITAS_SUPPORT = True
+finally: pass
 
 MODEL_DIR = os.environ["DATA_AND_TREES_MODEL_DIR"]
 DATA_DIR = os.environ["DATA_AND_TREES_DATA_DIR"]
@@ -41,6 +48,7 @@ class Dataset:
         if task == Task.REGRESSION:
             params = { # defaults
                 "objective": "reg:squarederror",
+                "eval_metric": "rmse",
                 "tree_method": "hist",
                 "seed": 14,
                 "nthread": self.nthreads,
@@ -83,6 +91,14 @@ class Dataset:
             self.Xtest = self.X.iloc[self.Itest]
             self.ytest = self.y[self.Itest]
 
+    def get_addtree(self, model, meta):
+        feat2id_dict = { s: i for i, s in enumerate(meta["columns"]) }
+        feat2id = feat2id_dict.__getitem__
+        if isinstance(model, xgb.Booster):
+            return veritas.addtree_from_xgb_model(model, feat2id)
+        else:
+            raise RuntimeError("not implemented")
+
     def _load_openml(self, name, data_id, force=False):
         if not os.path.exists(f"{self.data_dir}/{name}.h5") or force:
             print(f"loading {name} with fetch_openml")
@@ -101,7 +117,7 @@ class Dataset:
     ## model_cmp: (model, best_metric) -> `best_metric` if not better, new metric value if better
     #  best metric can be None
     def _get_xgb_model(self, num_trees, tree_depth,
-            model_cmp, custom_params={}):
+            model_cmp, metric_name, custom_params={}):
         model_name = self.get_model_name("xgb", num_trees, tree_depth)
         model_path = os.path.join(self.model_dir, model_name)
         if os.path.isfile(model_path):
@@ -143,7 +159,12 @@ class Dataset:
 
             model = best_model
             params["num_trees"] = num_trees
-            meta = {"params": params, "columns": self.X.columns}
+            meta = {
+                    "params": params,
+                    "columns": self.X.columns,
+                    "task": self.task,
+                    "metric": (metric_name, best_metric)
+            }
             joblib.dump((best_model, meta), model_path)
 
             del self.dtrain
@@ -154,6 +175,42 @@ class Dataset:
     def get_xgb_model(self, num_trees, tree_depth):
         # call _get_xgb_model with model comparison for lr optimization
         raise RuntimeError("override in subclass")
+
+    def _get_rf_model(self, num_trees, tree_depth):
+        model_name = self.get_model_name("rf", num_trees, tree_depth)
+        model_path = os.path.join(self.model_dir, model_name)
+        if os.path.isfile(model_path):
+            print(f"loading model from file: {model_name}")
+            model, meta = joblib.load(model_path)
+        else:
+            self.load_dataset()
+            self.train_and_test_set()
+
+            custom_params = {
+                "n_estimators": num_trees,
+                "max_depth": tree_depth,
+            }
+            params = self.rf_params(custom_params)
+
+            if self.task == Task.REGRESSION:
+                model = RandomForestRegressor(**params).fit(self.Xtrain, self.ytrain)
+                metric = metrics.mean_squared_error(model.predict(self.Xtest), self.ytest)
+                metric = np.sqrt(metric)
+                metric_name = "rmse"
+            else:
+                model = RandomForestClassifier(**params).fit(self.Xtrain, self.ytrain)
+                metric = metrics.accuracy_score(model.predict(self.Xtest), self.ytest)
+                metric_name = "acc"
+
+            meta = {
+                "params": params,
+                "metric": (metric_name, metric),
+            }
+            joblib.dump((model, meta), model_path)
+        return model, meta
+
+    def get_rf_model(self, num_trees, tree_depth):
+        return self._get_rf_model(num_trees, tree_depth)
 
     def get_model_name(self, model_type, num_trees, tree_depth):
         return f"{type(self).__name__}{self.name_suffix}-{num_trees}-{tree_depth}.{model_type}"
@@ -169,6 +226,17 @@ class Dataset:
         self.X = df
         self.name_suffix = f"-normalized{self.name_suffix}"
 
+def _rmse_metric(self, model, best_m):
+    yhat = model.predict(self.dtest, output_margin=True)
+    m = metrics.mean_squared_error(yhat, self.ytest)
+    m = np.sqrt(m)
+    return m if best_m is None or m < best_m else best_m
+
+def _acc_metric(self, model, best_m):
+    yhat = model.predict(self.dtest, output_margin=True)
+    m = metrics.accuracy_score(yhat > 0.0, self.ytest)
+    return m if best_m is None or m > best_m else best_m
+
 class Calhouse(Dataset):
 
     def __init__(self):
@@ -180,62 +248,42 @@ class Calhouse(Dataset):
             self.y = np.log(self.y)
 
     def get_xgb_model(self, num_trees, tree_depth):
-        def metric(self, model, best_m):
-            yhat = model.predict(self.dtest, output_margin=True)
-            m = metrics.mean_squared_error(yhat, self.ytest)
-            return m if best_m is None or m < best_m else best_m
         custom_params = {}
         return super()._get_xgb_model(num_trees, tree_depth,
-                partial(metric, self), custom_params)
+                partial(_rmse_metric, self), "rmse", custom_params)
 
-#class Allstate(Dataset):
-#    def __init__(self):
-#        super().__init__()
-#        self.params = {
-#            "objective": "reg:squarederror",
-#            "tree_method": "hist",
-#            "seed": 14,
-#            "nthread": 1,
-#        }
-#
-#    def load_dataset(self):
-#        if self.X is None or self.y is None:
-#            allstate_data_path = os.path.join(os.environ["VERITAS_DATA_DIR"], "allstate.h5")
-#            data = pd.read_hdf(allstate_data_path)
-#            self.X = data.drop(columns=["loss"])
-#            self.y = data.loss
-#
-#    def load_model(self, num_trees, tree_depth):
-#        model_name = self.get_model_name(num_trees, tree_depth)
-#        if not os.path.isfile(os.path.join(self.models_dir, f"{model_name}.xgb")):
-#            self.load_dataset()
-#            print(f"training model depth={tree_depth}, num_trees={num_trees}")
-#
-#            def metric(y, raw_yhat): #maximized
-#                return -metrics.mean_squared_error(y, raw_yhat)
-#
-#            self.params["max_depth"] = tree_depth
-#            self.model, lr, metric_value = util.optimize_learning_rate(self.X,
-#                    self.y, self.params, num_trees, metric)
-#
-#            self.meta = {"lr": lr, "metric": metric_value, "columns": list(self.X.columns)}
-#
-#            with open(os.path.join(self.models_dir, f"{model_name}.xgb"), "wb") as f:
-#                pickle.dump(self.model, f)
-#            with open(os.path.join(self.models_dir, f"{model_name}.meta"), "w") as f:
-#                json.dump(self.meta, f)
-#        else:
-#            print(f"loading model from file: {model_name}")
-#            with open(os.path.join(self.models_dir, f"{model_name}.xgb"), "rb") as f:
-#                self.model = pickle.load(f)
-#            with open(os.path.join(self.models_dir, f"{model_name}.meta"), "r") as f:
-#                self.meta = json.load(f)
-#
-#        feat2id_dict = {v: i for i, v in enumerate(self.meta["columns"])}
-#        self.feat2id = lambda x: feat2id_dict[x]
-#        self.at = addtree_from_xgb_model(self.model, feat2id_map=self.feat2id)
-#        self.at.base_score = 0
-#
+class Allstate(Dataset):
+    dataset_name = "allstate.h5"
+
+    def __init__(self):
+        super().__init__(Task.REGRESSION)
+
+    def load_dataset(self):
+        if self.X is None or self.y is None:
+            allstate_data_path = os.path.join(self.data_dir, Allstate.dataset_name)
+            data = pd.read_hdf(allstate_data_path)
+            self.X = data.drop(columns=["loss"])
+            self.y = data.loss
+
+    def get_xgb_model(self, num_trees, tree_depth):
+        custom_params = {}
+        return super()._get_xgb_model(num_trees, tree_depth,
+                partial(_rmse_metric, self), "rmse", custom_params)
+
+class Covtype(Dataset):
+    def __init__(self):
+        super().__init__(Task.CLASSIFICATION)
+
+    def load_dataset(self):
+        if self.X is None or self.y is None:
+            self.X, self.y = self._load_openml("covtype", data_id=1596)
+            self.y = (self.y==2)
+
+    def get_xgb_model(self, num_trees, tree_depth):
+        custom_params = {}
+        return super()._get_xgb_model(num_trees, tree_depth,
+                partial(_acc_metric, self), "acc", custom_params)
+
 #class Covtype(Dataset):
 #    def __init__(self):
 #        super().__init__()
