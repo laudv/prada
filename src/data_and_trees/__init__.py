@@ -227,6 +227,7 @@ class Dataset:
 
             meta = {
                 "params": params,
+                "columns": self.X.columns,
                 "task": self.task,
                 "metric": (metric_name, metric),
             }
@@ -248,7 +249,6 @@ class Dataset:
         X_scaled = min_max_scaler.fit_transform(X)
         df = pd.DataFrame(X_scaled, columns=self.X.columns)
         self.X = df
-        self.name_suffix = f"-normalized{self.name_suffix}"
 
 def _rmse_metric(self, model, best_m):
     yhat = model.predict(self.dtest, output_margin=True)
@@ -312,15 +312,14 @@ class Covtype(Dataset):
         return super()._get_xgb_model(num_trees, tree_depth,
                 partial(_acc_metric, self), "acc", custom_params)
 
-#class CovtypeNormalized(Covtype):
-#    def __init__(self):
-#        super().__init__()
-#
-#    def load_dataset(self):
-#        if self.X is None or self.y is None:
-#            super().load_dataset()
-#            self.minmax_normalize()
-#
+class CovtypeNormalized(Covtype):
+    def __init__(self):
+        super().__init__()
+
+    def load_dataset(self):
+        if self.X is None or self.y is None:
+            super().load_dataset()
+            self.minmax_normalize()
 
 class Higgs(Dataset):
     def __init__(self):
@@ -461,12 +460,14 @@ class Ijcnn1(Dataset):
                 partial(_acc_metric, self), "acc", custom_params)
 
 class Webspam(Dataset):
+    dataset_name = "webspam_wc_normalized_unigram.h5"
+
     def __init__(self):
         super().__init__(Task.CLASSIFICATION)
 
     def load_dataset(self):
         if self.X is None or self.y is None:
-            data_path = os.path.join(self.data_dir, "webspam_wc_normalized_unigram.h5")
+            data_path = os.path.join(self.data_dir, Webspam.dataset_name)
             self.X = pd.read_hdf(data_path, "X")
             self.X.columns = [f"a{i}" for i in range(self.X.shape[1])]
             self.y = pd.read_hdf(data_path, "y")
