@@ -380,15 +380,16 @@ class Mnist(Dataset):
 #            super().load_dataset()
 #            self.minmax_normalize()
 
-class Mnist2v6(Mnist):
+class Mnist2v6(Dataset):
     def __init__(self):
-        super().__init__()
+        super().__init__(Task.CLASSIFICATION)
 
     def load_dataset(self):
         if self.X is None or self.y is None:
-            super().load_dataset()
-            self.X = self.X.loc[(self.y==2) | (self.y==6), :]
-            self.y = self.y[(self.y==2) | (self.y==6)]
+            d = Mnist()
+            d.load_dataset()
+            self.X = d.X.loc[(d.y==2) | (d.y==6), :]
+            self.y = d.y[(d.y==2) | (d.y==6)]
             self.y = (self.y == 2.0).astype(float)
             self.X.reset_index(inplace=True, drop=True)
             self.y.reset_index(inplace=True, drop=True)
@@ -417,15 +418,16 @@ class FashionMnist(Dataset):
         return super()._get_xgb_model(num_trees, tree_depth,
                 partial(_multi_acc_metric, self), "macc", custom_params)
 
-class FashionMnist2v6(FashionMnist):
+class FashionMnist2v6(Dataset):
     def __init__(self):
         super().__init__(Task.CLASSIFICATION)
 
     def load_dataset(self):
         if self.X is None or self.y is None:
-            super().load_dataset()
-            self.X = self.X.loc[(self.y==2) | (self.y==6), :]
-            self.y = self.y[(self.y==2) | (self.y==6)]
+            d = FashionMnist()
+            d.load_dataset()
+            self.X = d.X.loc[(d.y==2) | (d.y==6), :]
+            self.y = self.y[(d.y==2) | (d.y==6)]
             self.y = (self.y == 2.0).astype(float)
             self.X.reset_index(inplace=True, drop=True)
             self.y.reset_index(inplace=True, drop=True)
