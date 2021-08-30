@@ -182,11 +182,13 @@ class Dataset:
             model = best_model
             params["num_trees"] = num_trees
             meta = {
-                    "params": params,
-                    "columns": self.X.columns,
-                    "task": self.task,
-                    "metric": (metric_name, best_metric),
-                    "lr": best_lr,
+                "params": params,
+                "num_trees": num_trees,
+                "tree_depth": tree_depth,
+                "columns": self.X.columns,
+                "task": self.task,
+                "metric": (metric_name, best_metric),
+                "lr": best_lr,
             }
             joblib.dump((best_model, meta), model_path)
 
@@ -227,6 +229,8 @@ class Dataset:
 
             meta = {
                 "params": params,
+                "num_trees": num_trees,
+                "tree_depth": tree_depth,
                 "columns": self.X.columns,
                 "task": self.task,
                 "metric": (metric_name, metric),
