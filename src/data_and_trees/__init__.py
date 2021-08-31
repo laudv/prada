@@ -77,10 +77,19 @@ class Dataset:
 
     def rf_params(self, custom_params):
         params = custom_params.copy()
+        params["n_jobs"] = self.nthreads
         return params
 
     def load_dataset(self): # populate X, y
         raise RuntimeError("not implemented")
+
+    def to_float32(self):
+        if self.X is not None: self.X = self.X.astype(np.float32)
+        if self.y is not None: self.y = self.y.astype(np.float32)
+        if self.Xtrain is not None: self.Xtrain = self.Xtrain.astype(np.float32)
+        if self.ytrain is not None: self.ytrain = self.ytrain.astype(np.float32)
+        if self.Xtest is not None: self.Xtest = self.Xtest.astype(np.float32)
+        if self.ytest is not None: self.ytest = self.ytest.astype(np.float32)
 
     def train_and_test_set(self, seed=39482, split_fraction=0.9, force=False):
         if self.X is None or self.y is None or force:
@@ -144,7 +153,7 @@ class Dataset:
         model_name = self.get_model_name("xgb", num_trees, tree_depth)
         model_path = os.path.join(self.model_dir, model_name)
         if os.path.isfile(model_path):
-            print(f"loading model from file: {model_name}")
+            print(f"loading XGB model from file: {model_name}")
             model, meta = joblib.load(model_path)
         else: # train model
             self.load_dataset()
@@ -205,7 +214,7 @@ class Dataset:
         model_name = self.get_model_name("rf", num_trees, tree_depth)
         model_path = os.path.join(self.model_dir, model_name)
         if os.path.isfile(model_path):
-            print(f"loading model from file: {model_name}")
+            print(f"loading RF model from file: {model_name}")
             model, meta = joblib.load(model_path)
         else:
             self.load_dataset()
@@ -431,7 +440,7 @@ class FashionMnist2v6(Dataset):
             d = FashionMnist()
             d.load_dataset()
             self.X = d.X.loc[(d.y==2) | (d.y==6), :]
-            self.y = self.y[(d.y==2) | (d.y==6)]
+            self.y = d.y[(d.y==2) | (d.y==6)]
             self.y = (self.y == 2.0).astype(float)
             self.X.reset_index(inplace=True, drop=True)
             self.y.reset_index(inplace=True, drop=True)
@@ -451,13 +460,17 @@ class Ijcnn1(Dataset):
     def load_dataset(self):
         if self.X is None or self.y is None:
             ijcnn1_data_path = os.path.join(self.data_dir, "ijcnn1.h5")
-            self.X = pd.read_hdf(ijcnn1_data_path, "Xtrain")
-            self.Xtest = pd.read_hdf(ijcnn1_data_path, "Xtest")
-            columns = [f"a{i}" for i in range(self.X.shape[1])]
-            self.X.columns = columns
-            self.Xtest.columns = columns
-            self.y = pd.read_hdf(ijcnn1_data_path, "ytrain")
-            self.ytest = pd.read_hdf(ijcnn1_data_path, "ytest")
+
+            # we choose new train/test subsets in 'train_and_test_set'
+            Xtrain = pd.read_hdf(ijcnn1_data_path, "Xtrain")
+            Xtest = pd.read_hdf(ijcnn1_data_path, "Xtest")
+            ytrain = pd.read_hdf(ijcnn1_data_path, "ytrain")
+            ytest = pd.read_hdf(ijcnn1_data_path, "ytest")
+
+            self.X = pd.concat((Xtrain, Xtest), axis=0, ignore_index=True)
+            self.y = pd.concat((ytrain, ytest), axis=0, ignore_index=True)
+            self.X.columns = [f"a{i}" for i in range(self.X.shape[1])]
+
             self.minmax_normalize()
 
     def get_xgb_model(self, num_trees, tree_depth):
