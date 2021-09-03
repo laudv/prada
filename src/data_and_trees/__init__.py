@@ -44,6 +44,9 @@ class Dataset:
         self.Xtest = None
         self.ytest = None
 
+    def name(self):
+        return type(self).__name__
+
     def xgb_params(self, task, custom_params={}):
         if task == Task.REGRESSION:
             params = { # defaults
