@@ -254,7 +254,7 @@ class Dataset:
         return self._get_rf_model(num_trees, tree_depth)
 
     def get_model_name(self, model_type, num_trees, tree_depth):
-        return f"{type(self).__name__}{self.name_suffix}-{num_trees}-{tree_depth}.{model_type}"
+        return f"{self.name()}{self.name_suffix}-{num_trees}-{tree_depth}.{model_type}"
 
     def minmax_normalize(self):
         if self.X is None:
@@ -281,6 +281,55 @@ def _multi_acc_metric(self, model, best_m):
     yhat = model.predict(self.dtest)
     m = metrics.accuracy_score(yhat, self.ytest)
     return m if best_m is None or m > best_m else best_m
+
+class MulticlassDataset(Dataset):
+    def __init__(self, num_classes):
+        super().__init__(Task.MULTI_CLASSIFICATION)
+        self.num_classes = num_classes
+
+    def get_class(self, cls):
+        self.load_dataset()
+        mask = np.zeros(self.X.shape[0])
+        if isinstance(cls, tuple):
+            for c in cls:
+                if c not in range(self.num_classes):
+                    raise ValueError(f"invalid class {c}")
+                mask = np.bitwise_or(mask, self.y == c)
+        else:
+            if cls not in range(self.num_classes):
+                raise ValueError(f"invalid class {cls}")
+            mask = (self.y == cls)
+        X = self.X.loc[mask, :]
+        y = self.y[mask]
+        X.reset_index(inplace=True, drop=True)
+        y.reset_index(inplace=True, drop=True)
+        return X, y
+
+class MultiBinClassDataset(Dataset):
+    def __init__(self, multiclass_dataset, class1, class2):
+        super().__init__(Task.CLASSIFICATION)
+        self.multi_dataset = multiclass_dataset
+        if not isinstance(self.multi_dataset, MulticlassDataset):
+            raise ValueError("not a multiclass dataset:",
+                    self.multi_dataset.name())
+        if class1 not in range(self.multi_dataset.num_classes):
+            raise ValueError("invalid class1")
+        if class2 not in range(self.multi_dataset.num_classes):
+            raise ValueError("invalid class2")
+        if class1 >= class2:
+            raise ValueError("take class1 < class2")
+        self.class1 = class1
+        self.class2 = class2
+
+    def load_dataset(self):
+        if self.X is None or self.y is None:
+            self.multi_dataset.load_dataset()
+            X, y = self.multi_dataset.get_class((self.class1, self.class2))
+            self.X = X
+            self.y = (y==self.class2)
+
+    def name(self):
+        return f"{super().name()}{self.class1}v{self.class2}"
 
 class Calhouse(Dataset):
     def __init__(self):
@@ -371,10 +420,9 @@ class LargeHiggs(Dataset):
         return super()._get_xgb_model(num_trees, tree_depth,
                 partial(_acc_metric, self), "acc", custom_params)
 
-class Mnist(Dataset):
+class Mnist(MulticlassDataset):
     def __init__(self):
-        self.num_classes = 10
-        super().__init__(Task.MULTI_CLASSIFICATION)
+        super().__init__(num_classes=10)
 
     def load_dataset(self):
         if self.X is None or self.y is None:
@@ -396,19 +444,9 @@ class Mnist(Dataset):
 #            super().load_dataset()
 #            self.minmax_normalize()
 
-class Mnist2v6(Dataset):
-    def __init__(self):
-        super().__init__(Task.CLASSIFICATION)
-
-    def load_dataset(self):
-        if self.X is None or self.y is None:
-            d = Mnist()
-            d.load_dataset()
-            self.X = d.X.loc[(d.y==2) | (d.y==6), :]
-            self.y = d.y[(d.y==2) | (d.y==6)]
-            self.y = (self.y == 2.0).astype(float)
-            self.X.reset_index(inplace=True, drop=True)
-            self.y.reset_index(inplace=True, drop=True)
+class MnistBinClass(MultiBinClassDataset):
+    def __init__(self, class1, class2):
+        super().__init__(Mnist(), class1, class2)
 
     def get_xgb_model(self, num_trees, tree_depth):
         custom_params = {
@@ -418,10 +456,19 @@ class Mnist2v6(Dataset):
         return super()._get_xgb_model(num_trees, tree_depth,
                 partial(_acc_metric, self), "acc", custom_params)
 
-class FashionMnist(Dataset):
+# 0  T-shirt/top
+# 1  Trouser
+# 2  Pullover
+# 3  Dress
+# 4  Coat
+# 5  Sandal
+# 6  Shirt
+# 7  Sneaker
+# 8  Bag
+# 9  Ankle boot
+class FashionMnist(MulticlassDataset):
     def __init__(self):
-        self.num_classes = 10
-        super().__init__(Task.MULTI_CLASSIFICATION)
+        super().__init__(num_classes=10)
 
     def load_dataset(self):
         if self.X is None or self.y is None:
@@ -434,19 +481,9 @@ class FashionMnist(Dataset):
         return super()._get_xgb_model(num_trees, tree_depth,
                 partial(_multi_acc_metric, self), "macc", custom_params)
 
-class FashionMnist2v6(Dataset):
-    def __init__(self):
-        super().__init__(Task.CLASSIFICATION)
-
-    def load_dataset(self):
-        if self.X is None or self.y is None:
-            d = FashionMnist()
-            d.load_dataset()
-            self.X = d.X.loc[(d.y==2) | (d.y==6), :]
-            self.y = d.y[(d.y==2) | (d.y==6)]
-            self.y = (self.y == 2.0).astype(float)
-            self.X.reset_index(inplace=True, drop=True)
-            self.y.reset_index(inplace=True, drop=True)
+class FashionMnistBinClass(MultiBinClassDataset):
+    def __init__(self, class1, class2):
+        super().__init__(FashionMnist(), class1, class2)
 
     def get_xgb_model(self, num_trees, tree_depth):
         custom_params = {
