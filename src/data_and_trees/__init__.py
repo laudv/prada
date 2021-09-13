@@ -8,6 +8,8 @@ import sklearn.metrics as metrics
 from sklearn import preprocessing
 from sklearn.datasets import fetch_openml
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
+from sklearn.ensemble import ExtraTreesClassifier, ExtraTreesRegressor
+from sklearn.neighbors import KDTree
 from functools import partial
 
 import xgboost as xgb
@@ -79,6 +81,11 @@ class Dataset:
         return params
 
     def rf_params(self, custom_params):
+        params = custom_params.copy()
+        params["n_jobs"] = self.nthreads
+        return params
+
+    def extra_trees_params(self, custom_params):
         params = custom_params.copy()
         params["n_jobs"] = self.nthreads
         return params
@@ -213,7 +220,7 @@ class Dataset:
         # call _get_xgb_model with model comparison for lr optimization
         raise RuntimeError("override in subclass")
 
-    def _get_rf_model(self, num_trees, tree_depth):
+    def get_rf_model(self, num_trees, tree_depth):
         model_name = self.get_model_name("rf", num_trees, tree_depth)
         model_path = os.path.join(self.model_dir, model_name)
         if os.path.isfile(model_path):
@@ -250,9 +257,56 @@ class Dataset:
             joblib.dump((model, meta), model_path)
         return model, meta
 
-    def get_rf_model(self, num_trees, tree_depth):
-        return self._get_rf_model(num_trees, tree_depth)
+    def get_extra_trees_model(self, num_trees, tree_depth):
+        model_name = self.get_model_name("et", num_trees, tree_depth)
+        model_path = os.path.join(self.model_dir, model_name)
+        if os.path.isfile(model_path):
+            print(f"loading ExtraTrees from file: {model_name}")
+            model, meta = joblib.load(model_path)
+        else:
+            self.load_dataset()
+            self.train_and_test_set()
 
+            custom_params = {
+                "n_estimators": num_trees,
+                "max_depth": tree_depth,
+                "random_state": 0,
+            }
+            params = self.extra_trees_params(custom_params)
+
+            if self.task == Task.REGRESSION:
+                model = ExtraTreesRegressor(**params).fit(self.Xtrain, self.ytrain)
+                metric = metrics.mean_squared_error(model.predict(self.Xtest), self.ytest)
+                metric = np.sqrt(metric)
+                metric_name = "rmse"
+            else:
+                model = ExtraTreesClassifier(**params).fit(self.Xtrain, self.ytrain)
+                metric = metrics.accuracy_score(model.predict(self.Xtest), self.ytest)
+                metric_name = "acc"
+            meta = {
+                "params": params,
+                "num_trees": num_trees,
+                "tree_depth": tree_depth,
+                "columns": self.X.columns,
+                "task": self.task,
+                "metric": (metric_name, metric),
+            }
+            joblib.dump((model, meta), model_path)
+        return model, meta
+
+    def get_kdtree(self):
+        model_name = self.get_model_name("kdtree", 0, 0)
+        model_path = os.path.join(self.model_dir, model_name)
+        if os.path.isfile(model_path):
+            print(f"loading KDTree from file: {model_name}")
+            kdtree = joblib.load(model_path)
+        else:
+            self.load_dataset()
+            self.train_and_test_set()
+            kdtree = KDTree(self.Xtrain)
+            joblib.dump(kdtree, model_path)
+        return kdtree
+        
     def get_model_name(self, model_type, num_trees, tree_depth):
         return f"{self.name()}{self.name_suffix}-{num_trees}-{tree_depth}.{model_type}"
 
