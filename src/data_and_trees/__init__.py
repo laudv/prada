@@ -548,12 +548,14 @@ class FashionMnistBinClass(MultiBinClassDataset):
                 partial(_acc_metric, self), "acc", custom_params)
 
 class Ijcnn1(Dataset):
+    dataset_name = "ijcnn1.h5"
+
     def __init__(self):
         super().__init__(Task.CLASSIFICATION)
 
     def load_dataset(self):
         if self.X is None or self.y is None:
-            ijcnn1_data_path = os.path.join(self.data_dir, "ijcnn1.h5")
+            ijcnn1_data_path = os.path.join(self.data_dir, Ijcnn1.dataset_name)
 
             # we choose new train/test subsets in 'train_and_test_set'
             Xtrain = pd.read_hdf(ijcnn1_data_path, "Xtrain")
