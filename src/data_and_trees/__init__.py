@@ -121,6 +121,22 @@ class Dataset:
             self.Xtest = self.X.iloc[self.Itest]
             self.ytest = self.y[self.Itest]
 
+    def cross_validation(self, Itrain, Itest, force=False):
+        if self.X is None or self.y is None:
+            raise RuntimeError("data not loaded")
+
+        if self.Itrain is None or self.Itest is None or force:
+            self.Itrain = Itrain
+            self.Itest = Itest
+
+        if self.Xtrain is None or self.ytrain is None or force:
+            self.Xtrain = self.X.iloc[self.Itrain]
+            self.ytrain = self.y[self.Itrain]
+
+        if self.Xtest is None or self.ytest is None or force:
+            self.Xtest = self.X.iloc[self.Itest]
+            self.ytest = self.y[self.Itest]
+
     def get_addtree(self, model, meta):
         if not VERITAS_SUPPORT:
             raise RuntimeError("Veritas not installed")
@@ -141,12 +157,12 @@ class Dataset:
             else:
                 return veritas.addtree_from_sklearn_ensemble(model)
 
-    def _load_openml(self, name, data_id, force=False):
+    def _load_openml(self, name, data_id, force=False, y_type=np.float32):
         if not os.path.exists(f"{self.data_dir}/{name}.h5") or force:
             print(f"loading {name} with fetch_openml")
             X, y = fetch_openml(data_id=data_id, return_X_y=True, as_frame=True)
             X = X.astype(np.float32)
-            y = y.astype(np.float32)
+            y = y.astype(y_type)
             X.to_hdf(f"{self.data_dir}/{name}.h5", key="X", complevel=9)
             y.to_hdf(f"{self.data_dir}/{name}.h5", key="y", complevel=9)
 
@@ -592,3 +608,28 @@ class Webspam(Dataset):
         custom_params = { }
         return super()._get_xgb_model(num_trees, tree_depth,
                 partial(_acc_metric, self), "acc", custom_params)
+
+class BreastCancer(Dataset):
+    def __init__(self):
+        super().__init__(Task.CLASSIFICATION)
+
+    def load_dataset(self):
+        if self.X is None or self.y is None:
+            self.X, self.y = self._load_openml("breast-w", data_id=15, y_type=str)
+            self.y = (self.y == 'malignant')
+            self.X.fillna(self.X.mean(), inplace=True)
+            self.y = self.y.astype(np.float32)
+
+    def get_xgb_model(self, num_trees, tree_depth):
+        custom_params = {}
+        return super()._get_xgb_model(num_trees, tree_depth,
+                partial(_acc_metric, self), "acc", custom_params)
+
+class BreastCancerNormalized(BreastCancer):
+    def __init__(self):
+        super().__init__()
+
+    def load_dataset(self):
+        if self.X is None or self.y is None:
+            super().load_dataset()
+            self.minmax_normalize()
