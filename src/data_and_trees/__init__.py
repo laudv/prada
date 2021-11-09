@@ -1,4 +1,4 @@
-import os, json
+import os, json, time
 import joblib
 import enum
 import numpy as np
@@ -9,7 +9,9 @@ from sklearn import preprocessing
 from sklearn.datasets import fetch_openml
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 from sklearn.ensemble import ExtraTreesClassifier, ExtraTreesRegressor
-from sklearn.neighbors import KDTree
+from sklearn.neighbors import KDTree, LocalOutlierFactor
+from sklearn.ensemble import IsolationForest
+from sklearn.svm import OneClassSVM
 from functools import partial
 
 import xgboost as xgb
@@ -30,26 +32,21 @@ class Task(enum.Enum):
     MULTI_CLASSIFICATION = 3
 
 class Dataset:
-    def __init__(self, task, name_suffix=""):
+    def __init__(self, task, nfolds=10, seed=18):
         self.task = task
         self.model_dir = MODEL_DIR
         self.data_dir = DATA_DIR
         self.nthreads = NTHREADS
+        self.nfolds = nfolds
+        self.seed = seed
 
-        self.name_suffix = name_suffix # special parameters, name indication
         self.X = None
         self.y = None
-        self.Itrain = None
-        self.Itest = None
-        self.Xtrain = None
-        self.ytrain = None
-        self.Xtest = None
-        self.ytest = None
 
     def name(self):
         return type(self).__name__
 
-    def xgb_params(self, task, custom_params={}):
+    def xgb_params(self, task):
         if task == Task.REGRESSION:
             params = { # defaults
                 "objective": "reg:squarederror",
@@ -77,65 +74,36 @@ class Dataset:
             }
         else:
             raise RuntimeError("unknown task")
-        params.update(custom_params)
         return params
 
-    def rf_params(self, custom_params):
-        params = custom_params.copy()
-        params["n_jobs"] = self.nthreads
-        return params
+    def rf_params(self):
+        return { "n_jobs": self.nthreads }
 
-    def extra_trees_params(self, custom_params):
-        params = custom_params.copy()
-        params["n_jobs"] = self.nthreads
-        return params
+    def extra_trees_params(self):
+        return { "n_jobs": self.nthreads }
 
     def load_dataset(self): # populate X, y
-        raise RuntimeError("not implemented")
-
-    def to_float32(self):
-        if self.X is not None: self.X = self.X.astype(np.float32)
-        if self.y is not None: self.y = self.y.astype(np.float32)
-        if self.Xtrain is not None: self.Xtrain = self.Xtrain.astype(np.float32)
-        if self.ytrain is not None: self.ytrain = self.ytrain.astype(np.float32)
-        if self.Xtest is not None: self.Xtest = self.Xtest.astype(np.float32)
-        if self.ytest is not None: self.ytest = self.ytest.astype(np.float32)
-
-    def train_and_test_set(self, seed=39482, split_fraction=0.9, force=False):
-        if self.X is None or self.y is None or force:
-            raise RuntimeError("data not loaded")
-
-        if self.Itrain is None or self.Itest is None or force:
-            np.random.seed(seed)
-            indices = np.random.permutation(self.X.shape[0])
-
-            m = int(self.X.shape[0]*split_fraction)
-            self.Itrain = indices[0:m]
-            self.Itest = indices[m:]
-
-        if self.Xtrain is None or self.ytrain is None or force:
-            self.Xtrain = self.X.iloc[self.Itrain]
-            self.ytrain = self.y[self.Itrain]
-
-        if self.Xtest is None or self.ytest is None or force:
-            self.Xtest = self.X.iloc[self.Itest]
-            self.ytest = self.y[self.Itest]
-
-    def cross_validation(self, Itrain, Itest, force=False):
         if self.X is None or self.y is None:
-            raise RuntimeError("data not loaded")
+            raise RuntimeError("override this and call after loading X and y")
+        self.X = self.X.astype(np.float32)
+        self.y = self.y.astype(np.float32)
+        N = self.X.shape[0]
 
-        if self.Itrain is None or self.Itest is None or force:
-            self.Itrain = Itrain
-            self.Itest = Itest
+        rand = np.random.RandomState(self.seed)
+        self.Is = rand.permutation(N)
 
-        if self.Xtrain is None or self.ytrain is None or force:
-            self.Xtrain = self.X.iloc[self.Itrain]
-            self.ytrain = self.y[self.Itrain]
+        fold_size = self.Is.shape[0] / self.nfolds
+        self.Ifolds = [self.Is[int(i*fold_size):int((i+1)*fold_size)]
+                            for i in range(self.nfolds)]
 
-        if self.Xtest is None or self.ytest is None or force:
-            self.Xtest = self.X.iloc[self.Itest]
-            self.ytest = self.y[self.Itest]
+    def train_and_test_set(self, fold):
+        Itrain = np.hstack([self.Ifolds[j] for j in range(self.nfolds) if fold!=j])
+        Xtrain = self.X.iloc[Itrain, :]
+        ytrain = self.y[Itrain]
+        Itest = self.Ifolds[fold]
+        Xtest = self.X.iloc[Itest, :]
+        ytest = self.y[Itest]
+        return Xtrain, ytrain, Xtest, ytest
 
     def get_addtree(self, model, meta):
         if not VERITAS_SUPPORT:
@@ -160,6 +128,7 @@ class Dataset:
     def _load_openml(self, name, data_id, force=False, y_type=np.float32):
         if not os.path.exists(f"{self.data_dir}/{name}.h5") or force:
             print(f"loading {name} with fetch_openml")
+            global X, y
             X, y = fetch_openml(data_id=data_id, return_X_y=True, as_frame=True)
             X = X.astype(np.float32)
             y = y.astype(y_type)
@@ -174,47 +143,35 @@ class Dataset:
 
     ## model_cmp: (model, best_metric) -> `best_metric` if not better, new metric value if better
     #  best metric can be None
-    def _get_xgb_model(self, num_trees, tree_depth,
-            model_cmp, metric_name, custom_params={}):
-        model_name = self.get_model_name("xgb", num_trees, tree_depth)
+    def get_xgb_model(self, fold, learning_rate, num_trees, tree_depth):
+        lr = learning_rate
+        model_name = self.get_model_name(fold, "xgb", num_trees, tree_depth, lr=f"{lr*100:.0f}")
         model_path = os.path.join(self.model_dir, model_name)
         if os.path.isfile(model_path):
-            print(f"loading XGB model from file: {model_name}")
+            print(f"loading XGB model from file: {model_path}")
             model, meta = joblib.load(model_path)
         else: # train model
             self.load_dataset()
-            self.train_and_test_set()
+            Xtrain, ytrain, Xtest, ytest = self.train_and_test_set(fold)
 
-            self.dtrain = xgb.DMatrix(self.Xtrain, self.ytrain, missing=None)
-            self.dtest = xgb.DMatrix(self.Xtest, self.ytest, missing=None)
+            dtrain = xgb.DMatrix(Xtrain, ytrain, missing=None)
+            dtest = xgb.DMatrix(Xtest, ytest, missing=None)
 
-            params = self.xgb_params(self.task, custom_params)
+            params = self.xgb_params(self.task)
             params["max_depth"] = tree_depth
+            params["learning_rate"] = learning_rate
 
-            # Looking for best learning rate
-            best_metric, best_model, best_lr = None, None, None
-            for lr in np.linspace(0, 1, 5)[1:]:
-                print("(1) LEARNING_RATE =", lr)
-                params["learning_rate"] = lr
-                model = xgb.train(params, self.dtrain, num_boost_round=num_trees,
-                                  evals=[(self.dtrain, "train"), (self.dtest, "test")])
-                metric = model_cmp(model, best_metric)
-                if metric != best_metric:
-                    best_metric, best_model, best_lr = metric, model, lr
+            model = xgb.train(params, dtrain, num_boost_round=num_trees,
+                              evals=[(dtrain, "train"), (dtest, "test")])
 
-            for lr in np.linspace(best_lr - 0.25, best_lr + 0.25, 7)[1:-1]:
-                if lr <= 0.0 or lr >= 1.0: continue
-                if lr in np.linspace(0, 1, 5)[1:]: continue
-                print("(2) LEARNING_RATE =", lr)
-                params["learning_rate"] = lr
-                model = xgb.train(params, self.dtrain, num_boost_round=num_trees,
-                                  evals=[(self.dtrain, "train"), (self.dtest, "test")])
-                metric = model_cmp(model, best_metric)
-                if metric != best_metric:
-                    best_metric, best_model, best_lr = metric, model, lr
-            print(f"(*) best metric = {best_metric} for lr = {best_lr}")
+            if self.task == Task.REGRESSION:
+                metric = metrics.mean_squared_error(model.predict(dtest), ytest)
+                metric = np.sqrt(metric)
+                metric_name = "rmse"
+            else:
+                metric = metrics.accuracy_score(model.predict(dtest)>0.5, ytest)
+                metric_name = "acc"
 
-            model = best_model
             params["num_trees"] = num_trees
             meta = {
                 "params": params,
@@ -222,44 +179,75 @@ class Dataset:
                 "tree_depth": tree_depth,
                 "columns": self.X.columns,
                 "task": self.task,
-                "metric": (metric_name, best_metric),
-                "lr": best_lr,
+                "metric": (metric_name, metric),
+                "lr": lr,
             }
-            joblib.dump((best_model, meta), model_path)
+            joblib.dump((model, meta), model_path)
+            return model, meta
 
-            del self.dtrain
-            del self.dtest
+            ## Looking for best learning rate
+            #best_metric, best_model, best_lr = None, None, None
+            #for lr in np.linspace(0, 1, 5)[1:]:
+            #    print("(1) LEARNING_RATE =", lr)
+            #    params["learning_rate"] = lr
+            #    model = xgb.train(params, self.dtrain, num_boost_round=num_trees,
+            #                      evals=[(self.dtrain, "train"), (self.dtest, "test")])
+            #    metric = model_cmp(model, best_metric)
+            #    if metric != best_metric:
+            #        best_metric, best_model, best_lr = metric, model, lr
+
+            #for lr in np.linspace(best_lr - 0.25, best_lr + 0.25, 7)[1:-1]:
+            #    if lr <= 0.0 or lr >= 1.0: continue
+            #    if lr in np.linspace(0, 1, 5)[1:]: continue
+            #    print("(2) LEARNING_RATE =", lr)
+            #    params["learning_rate"] = lr
+            #    model = xgb.train(params, self.dtrain, num_boost_round=num_trees,
+            #                      evals=[(self.dtrain, "train"), (self.dtest, "test")])
+            #    metric = model_cmp(model, best_metric)
+            #    if metric != best_metric:
+            #        best_metric, best_model, best_lr = metric, model, lr
+            #print(f"(*) best metric = {best_metric} for lr = {best_lr}")
+
+            #model = best_model
+            #params["num_trees"] = num_trees
+            #meta = {
+            #    "params": params,
+            #    "num_trees": num_trees,
+            #    "tree_depth": tree_depth,
+            #    "columns": self.X.columns,
+            #    "task": self.task,
+            #    "metric": (metric_name, best_metric),
+            #    "lr": best_lr,
+            #}
+            #joblib.dump((best_model, meta), model_path)
+
+            #del self.dtrain
+            #del self.dtest
 
         return model, meta
 
-    def get_xgb_model(self, num_trees, tree_depth):
-        # call _get_xgb_model with model comparison for lr optimization
-        raise RuntimeError("override in subclass")
-
-    def get_rf_model(self, num_trees, tree_depth):
-        model_name = self.get_model_name("rf", num_trees, tree_depth)
+    def get_rf_model(self, fold, num_trees, tree_depth):
+        model_name = self.get_model_name(fold, "rf", num_trees, tree_depth)
         model_path = os.path.join(self.model_dir, model_name)
         if os.path.isfile(model_path):
             print(f"loading RF model from file: {model_name}")
             model, meta = joblib.load(model_path)
         else:
             self.load_dataset()
-            self.train_and_test_set()
+            Xtrain, ytrain, Xtest, ytest = self.train_and_test_set(fold)
 
-            custom_params = {
-                "n_estimators": num_trees,
-                "max_depth": tree_depth,
-            }
-            params = self.rf_params(custom_params)
+            params = self.rf_params()
+            params["n_estimators"] = num_trees
+            params["max_depth"] = tree_depth
 
             if self.task == Task.REGRESSION:
-                model = RandomForestRegressor(**params).fit(self.Xtrain, self.ytrain)
-                metric = metrics.mean_squared_error(model.predict(self.Xtest), self.ytest)
+                model = RandomForestRegressor(**params).fit(Xtrain, ytrain)
+                metric = metrics.mean_squared_error(model.predict(Xtest), ytest)
                 metric = np.sqrt(metric)
                 metric_name = "rmse"
             else:
-                model = RandomForestClassifier(**params).fit(self.Xtrain, self.ytrain)
-                metric = metrics.accuracy_score(model.predict(self.Xtest), self.ytest)
+                model = RandomForestClassifier(**params).fit(Xtrain, ytrain)
+                metric = metrics.accuracy_score(model.predict(Xtest), ytest)
                 metric_name = "acc"
 
             meta = {
@@ -283,12 +271,10 @@ class Dataset:
             self.load_dataset()
             self.train_and_test_set()
 
-            custom_params = {
-                "n_estimators": num_trees,
-                "max_depth": tree_depth,
-                "random_state": 0,
-            }
-            params = self.extra_trees_params(custom_params)
+            params = self.extra_trees_params()
+            params["n_estimators"] = num_trees
+            params["max_depth"] = tree_depth
+            params["random_state"] = 0
 
             if self.task == Task.REGRESSION:
                 model = ExtraTreesRegressor(**params).fit(self.Xtrain, self.ytrain)
@@ -310,21 +296,80 @@ class Dataset:
             joblib.dump((model, meta), model_path)
         return model, meta
 
-    def get_kdtree(self):
+    def get_kdtree(self, fold):
         model_name = self.get_model_name("kdtree", 0, 0)
         model_path = os.path.join(self.model_dir, model_name)
         if os.path.isfile(model_path):
             print(f"loading KDTree from file: {model_name}")
-            kdtree = joblib.load(model_path)
+            kdtree, meta = joblib.load(model_path)
         else:
             self.load_dataset()
-            self.train_and_test_set()
-            kdtree = KDTree(self.Xtrain)
-            joblib.dump(kdtree, model_path)
-        return kdtree
+            t = time.time()
+            Xtrain, ytrain, Xtest, ytest = self.train_and_test_set(fold)
+            kdtree = KDTree(Xtrain)
+            t = time.time()-t
+            print(f"trained KDTree in {t:.2f}s");
+            meta = {"training_time": t}
+            joblib.dump((kdtree, meta), model_path)
+        return kdtree, meta
+
+    def get_iforest(self, fold):
+        model_name = self.get_model_name(fold, "iforest", 0, 0)
+        model_path = os.path.join(self.model_dir, model_name)
+        if os.path.isfile(model_path):
+            print(f"loading Isolation Forest from file: {model_name}")
+            iforest, meta = joblib.load(model_path)
+        else:
+            self.load_dataset()
+            Xtrain, ytrain, Xtest, ytest = self.train_and_test_set(fold)
+            t = time.time()
+            iforest = IsolationForest().fit(Xtrain)
+            t = time.time() - t
+            print(f"trained Isolation Forest in {t:.2f}s");
+            meta = {"training_time": t}
+            joblib.dump((iforest, meta), model_path)
+        return iforest, meta
+
+    def get_lof(self, fold):
+        model_name = self.get_model_name(fold, "lof", 0, 0)
+        model_path = os.path.join(self.model_dir, model_name)
+        if os.path.isfile(model_path):
+            print(f"loading LocalOutlierFactor from file: {model_name}")
+            lof, meta = joblib.load(model_path)
+        else:
+            self.load_dataset()
+            Xtrain, ytrain, Xtest, ytest = self.train_and_test_set(fold)
+            t = time.time()
+            lof = LocalOutlierFactor()
+            lof.fit(Xtrain)
+            t = time.time() - t
+            print(f"trained LocalOutlierFactor in {t:.2f}s");
+            meta = {"training_time": t}
+            joblib.dump((lof, meta), model_path)
+        return lof, meta
+
+    def get_oneclasssvm(self, fold):
+        model_name = self.get_model_name(fold, "ocsvm", 0, 0)
+        model_path = os.path.join(self.model_dir, model_name)
+        if os.path.isfile(model_path):
+            print(f"loading OneClassSVM from file: {model_name}")
+            svm, meta = joblib.load(model_path)
+        else:
+            self.load_dataset()
+            Xtrain, ytrain, Xtest, ytest = self.train_and_test_set(fold)
+            t = time.time()
+            svm = OneClassSVM()
+            svm.fit(Xtrain)
+            t = time.time() - t
+            print(f"trained OneClassSVM in {t:.2f}s");
+            meta = {"training_time": t}
+            joblib.dump((svm, meta), model_path)
+        return svm, meta
         
-    def get_model_name(self, model_type, num_trees, tree_depth):
-        return f"{self.name()}{self.name_suffix}-{num_trees}-{tree_depth}.{model_type}"
+    def get_model_name(self, fold, model_type, num_trees, tree_depth, **kwargs):
+        a = "-".join(f"{k}{v}" for k, v in kwargs.items())
+        return f"{self.name()}-seed{self.seed}-fold{fold}_{num_trees}-{tree_depth}{a}.{model_type}"
+
 
     def minmax_normalize(self):
         if self.X is None:
@@ -397,6 +442,7 @@ class MultiBinClassDataset(Dataset):
             X, y = self.multi_dataset.get_class((self.class1, self.class2))
             self.X = X
             self.y = (y==self.class2)
+            super().load_dataset()
 
     def name(self):
         return f"{super().name()}{self.class1}v{self.class2}"
@@ -409,11 +455,7 @@ class Calhouse(Dataset):
         if self.X is None or self.y is None:
             self.X, self.y = self._load_openml("calhouse", data_id=537)
             self.y = np.log(self.y)
-
-    def get_xgb_model(self, num_trees, tree_depth):
-        custom_params = {}
-        return super()._get_xgb_model(num_trees, tree_depth,
-                partial(_rmse_metric, self), "rmse", custom_params)
+            super().load_dataset()
 
 class Allstate(Dataset):
     dataset_name = "allstate.h5"
@@ -427,11 +469,7 @@ class Allstate(Dataset):
             data = pd.read_hdf(allstate_data_path)
             self.X = data.drop(columns=["loss"])
             self.y = data.loss
-
-    def get_xgb_model(self, num_trees, tree_depth):
-        custom_params = {}
-        return super()._get_xgb_model(num_trees, tree_depth,
-                partial(_rmse_metric, self), "rmse", custom_params)
+            super().load_dataset()
 
 class Covtype(Dataset):
     def __init__(self):
@@ -441,11 +479,7 @@ class Covtype(Dataset):
         if self.X is None or self.y is None:
             self.X, self.y = self._load_openml("covtype", data_id=1596)
             self.y = (self.y==2)
-
-    def get_xgb_model(self, num_trees, tree_depth):
-        custom_params = {}
-        return super()._get_xgb_model(num_trees, tree_depth,
-                partial(_acc_metric, self), "acc", custom_params)
+            super().load_dataset()
 
 class CovtypeNormalized(Covtype):
     def __init__(self):
@@ -465,11 +499,7 @@ class Higgs(Dataset):
             higgs_data_path = os.path.join(self.data_dir, "higgs.h5")
             self.X = pd.read_hdf(higgs_data_path, "X")
             self.y = pd.read_hdf(higgs_data_path, "y")
-
-    def get_xgb_model(self, num_trees, tree_depth):
-        custom_params = {}
-        return super()._get_xgb_model(num_trees, tree_depth,
-                partial(_acc_metric, self), "acc", custom_params)
+            super().load_dataset()
 
 class LargeHiggs(Dataset):
     def __init__(self):
@@ -484,11 +514,7 @@ class LargeHiggs(Dataset):
             columns = [f"a{i}" for i in range(self.X.shape[1])]
             self.X.columns = columns
             self.minmax_normalize()
-
-    def get_xgb_model(self, num_trees, tree_depth):
-        custom_params = {}
-        return super()._get_xgb_model(num_trees, tree_depth,
-                partial(_acc_metric, self), "acc", custom_params)
+            super().load_dataset()
 
 class Mnist(MulticlassDataset):
     def __init__(self):
@@ -497,34 +523,22 @@ class Mnist(MulticlassDataset):
     def load_dataset(self):
         if self.X is None or self.y is None:
             self.X, self.y = self._load_openml("mnist", data_id=554)
+            super().load_dataset()
 
-    def get_xgb_model(self, num_trees, tree_depth):
-        custom_params = {
-            "num_class": self.num_classes,
-        }
-        return super()._get_xgb_model(num_trees, tree_depth,
-                partial(_multi_acc_metric, self), "macc", custom_params)
-
-#class MnistNormalized(Mnist):
-#    def __init__(self):
-#        super().__init__()
-#
-#    def load_dataset(self):
-#        if self.X is None or self.y is None:
-#            super().load_dataset()
-#            self.minmax_normalize()
+    def xgb_params(self, task):
+        params = Dataset.xgb_params(self, task)
+        params["num_class"] = self.num_classes
+        return params
 
 class MnistBinClass(MultiBinClassDataset):
     def __init__(self, class1, class2):
         super().__init__(Mnist(), class1, class2)
 
-    def get_xgb_model(self, num_trees, tree_depth):
-        custom_params = {
-            "subsample": 0.5,
-            "colsample_bytree": 0.8,
-        }
-        return super()._get_xgb_model(num_trees, tree_depth,
-                partial(_acc_metric, self), "acc", custom_params)
+    def xgb_params(self, task):
+        params = Dataset.xgb_params(self, task)
+        params["subsample"] = 0.5
+        params["colsample_bytree"] = 0.8
+        return params
 
 # 0  T-shirt/top
 # 1  Trouser
@@ -543,25 +557,23 @@ class FashionMnist(MulticlassDataset):
     def load_dataset(self):
         if self.X is None or self.y is None:
             self.X, self.y = self._load_openml("fashion_mnist", data_id=40996)
+            super().load_dataset()
 
-    def get_xgb_model(self, num_trees, tree_depth):
-        custom_params = {
-            "num_class": self.num_classes,
-        }
-        return super()._get_xgb_model(num_trees, tree_depth,
-                partial(_multi_acc_metric, self), "macc", custom_params)
+    def xgb_params(self, task):
+        params = Dataset.xgb_params(self, task)
+        params["num_class"] = self.num_classes
+        return params
 
 class FashionMnistBinClass(MultiBinClassDataset):
     def __init__(self, class1, class2):
         super().__init__(FashionMnist(), class1, class2)
 
-    def get_xgb_model(self, num_trees, tree_depth):
-        custom_params = {
-            "subsample": 0.5,
-            "colsample_bytree": 0.8,
-        }
-        return super()._get_xgb_model(num_trees, tree_depth,
-                partial(_acc_metric, self), "acc", custom_params)
+
+    def xgb_params(self, task):
+        params = Dataset.xgb_params(self, task)
+        params["subsample"] = 0.5
+        params["colsample_bytree"] = 0.8
+        return params
 
 class Ijcnn1(Dataset):
     dataset_name = "ijcnn1.h5"
@@ -584,11 +596,7 @@ class Ijcnn1(Dataset):
             self.X.columns = [f"a{i}" for i in range(self.X.shape[1])]
 
             self.minmax_normalize()
-
-    def get_xgb_model(self, num_trees, tree_depth):
-        custom_params = { }
-        return super()._get_xgb_model(num_trees, tree_depth,
-                partial(_acc_metric, self), "acc", custom_params)
+            super().load_dataset()
 
 class Webspam(Dataset):
     dataset_name = "webspam_wc_normalized_unigram.h5"
@@ -603,11 +611,7 @@ class Webspam(Dataset):
             self.X.columns = [f"a{i}" for i in range(self.X.shape[1])]
             self.y = pd.read_hdf(data_path, "y")
             self.minmax_normalize()
-
-    def get_xgb_model(self, num_trees, tree_depth):
-        custom_params = { }
-        return super()._get_xgb_model(num_trees, tree_depth,
-                partial(_acc_metric, self), "acc", custom_params)
+            super().load_dataset()
 
 class BreastCancer(Dataset):
     def __init__(self):
@@ -619,11 +623,7 @@ class BreastCancer(Dataset):
             self.y = (self.y == 'malignant')
             self.X.fillna(self.X.mean(), inplace=True)
             self.y = self.y.astype(np.float32)
-
-    def get_xgb_model(self, num_trees, tree_depth):
-        custom_params = {}
-        return super()._get_xgb_model(num_trees, tree_depth,
-                partial(_acc_metric, self), "acc", custom_params)
+            super().load_dataset()
 
 class BreastCancerNormalized(BreastCancer):
     def __init__(self):
@@ -633,3 +633,12 @@ class BreastCancerNormalized(BreastCancer):
         if self.X is None or self.y is None:
             super().load_dataset()
             self.minmax_normalize()
+        
+#class KddCup99(Dataset):
+#    def __init__(self):
+#        super().__init__(Task.CLASSIFICATION)
+#
+#    def load_dataset(self):
+#        if self.X is None or self.y is None:
+#            self.X, self.y = self._load_openml("kkdcup99", data_id=1113)
+#            self.y = np.log(self.y)
