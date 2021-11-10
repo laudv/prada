@@ -125,13 +125,13 @@ class Dataset:
             else:
                 return veritas.addtree_from_sklearn_ensemble(model)
 
-    def _load_openml(self, name, data_id, force=False, y_type=np.float32):
+    def _load_openml(self, name, data_id, force=False):
         if not os.path.exists(f"{self.data_dir}/{name}.h5") or force:
             print(f"loading {name} with fetch_openml")
-            global X, y
             X, y = fetch_openml(data_id=data_id, return_X_y=True, as_frame=True)
+            X, y = self._transform_X_y(X, y)
             X = X.astype(np.float32)
-            y = y.astype(y_type)
+            y = y.astype(np.float32)
             X.to_hdf(f"{self.data_dir}/{name}.h5", key="X", complevel=9)
             y.to_hdf(f"{self.data_dir}/{name}.h5", key="y", complevel=9)
 
@@ -139,6 +139,9 @@ class Dataset:
         X = pd.read_hdf(f"{self.data_dir}/{name}.h5", key="X")
         y = pd.read_hdf(f"{self.data_dir}/{name}.h5", key="y")
 
+        return X, y
+
+    def _transform_X_y(self, X, y): # override if necessary
         return X, y
 
     ## model_cmp: (model, best_metric) -> `best_metric` if not better, new metric value if better
@@ -617,12 +620,14 @@ class BreastCancer(Dataset):
     def __init__(self):
         super().__init__(Task.CLASSIFICATION)
 
+    def _transform_X_y(self, X, y):
+        y = (y == 'malignant')
+        return X, y
+
     def load_dataset(self):
         if self.X is None or self.y is None:
-            self.X, self.y = self._load_openml("breast-w", data_id=15, y_type=str)
-            self.y = (self.y == 'malignant')
+            self.X, self.y = self._load_openml("breast-w", data_id=15)
             self.X.fillna(self.X.mean(), inplace=True)
-            self.y = self.y.astype(np.float32)
             super().load_dataset()
 
 class BreastCancerNormalized(BreastCancer):
@@ -633,12 +638,70 @@ class BreastCancerNormalized(BreastCancer):
         if self.X is None or self.y is None:
             super().load_dataset()
             self.minmax_normalize()
+
+class Adult(Dataset):
+    def __init__(self):
+        super().__init__(Task.CLASSIFICATION)
+
+    def _transform_X_y(self, X, y):
+        X["workclass"] = (X.workclass=="private")
+        X["male"] = (X.sex=="Male")
+        X["from_us"] = (X["native-country"]=="United-States")
+        X["marital-status"] = \
+            (X["marital-status"]=="Married-vic-spouse") * 4.0\
+            + (X["marital-status"]=="Never-married") * 3.0\
+            + (X["marital-status"]=="Divorced") * 2.0\
+            + (X["marital-status"]=="Separated") * 1.0
+        X = pd.get_dummies(X, columns=["occupation", "relationship", "race"], drop_first=True)
+        X.drop(inplace=True, columns=["education", "sex", "native-country"])
+        y = (y == ">50K")
+        return X, y
+
+    def load_dataset(self):
+        if self.X is None or self.y is None:
+            self.X, self.y = self._load_openml("adult", data_id=179)
+            self.minmax_normalize()
+            super().load_dataset()
         
-#class KddCup99(Dataset):
-#    def __init__(self):
-#        super().__init__(Task.CLASSIFICATION)
-#
-#    def load_dataset(self):
-#        if self.X is None or self.y is None:
-#            self.X, self.y = self._load_openml("kkdcup99", data_id=1113)
-#            self.y = np.log(self.y)
+class KddCup99(Dataset):
+    def __init__(self):
+        super().__init__(Task.CLASSIFICATION)
+
+    def _transform_X_y(self, X, y):
+        X["service_ecr_i"] = (X.service == "ecr_i")
+        X["service_priv"] = (X.service == "private")
+        X["service_http"] = (X.service == "http")
+        X["service_smtp"] = (X.service == "smtp")
+        X["flag_sf"] = (X.flag == "SF")
+        X["flag_s0"] = (X.flag == "S0")
+        X["flag_rej"] = (X.flag == "rej")
+        X = pd.get_dummies(X, columns=["protocol_type"], drop_first=True)
+        X.drop(inplace=True, columns=["service", "flag", "land", "urgent"])
+        y = (y=="normal")
+        return X, y
+
+    def load_dataset(self):
+        if self.X is None or self.y is None:
+            self.X, self.y = self._load_openml("kkdcup99", data_id=1113)
+            self.minmax_normalize()
+            super().load_dataset()
+
+    def xgb_params(self, task):
+        params = Dataset.xgb_params(self, task)
+        params["subsample"] = 0.5
+        params["colsample_bytree"] = 0.8
+        return params
+
+class Vehicle(Dataset):
+    def __init__(self):
+        super().__init__(Task.CLASSIFICATION)
+
+    def _transform_X_y(self, X, y):
+        y = (y == "bus") | (y == "van")
+        return X, y
+
+    def load_dataset(self):
+        if self.X is None or self.y is None:
+            self.X, self.y = self._load_openml("vehicle", data_id=54)
+            self.minmax_normalize()
+            super().load_dataset()
