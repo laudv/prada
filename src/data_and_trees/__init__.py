@@ -52,7 +52,7 @@ class Dataset:
                 "objective": "reg:squarederror",
                 "eval_metric": "rmse",
                 "tree_method": "hist",
-                "seed": 14,
+                "seed": self.seed,
                 "nthread": self.nthreads,
             }
         elif task == Task.CLASSIFICATION:
@@ -60,7 +60,7 @@ class Dataset:
                 "objective": "binary:logistic",
                 "eval_metric": "error",
                 "tree_method": "hist",
-                "seed": 220,
+                "seed": self.seed,
                 "nthread": self.nthreads,
             }
         elif task == Task.MULTI_CLASSIFICATION:
@@ -69,7 +69,7 @@ class Dataset:
                 "objective": "multi:softmax",
                 "tree_method": "hist",
                 "eval_metric": "merror",
-                "seed": 53589,
+                "seed": self.seed,
                 "nthread": self.nthreads,
             }
         else:
@@ -401,8 +401,8 @@ def _multi_acc_metric(self, model, best_m):
     return m if best_m is None or m > best_m else best_m
 
 class MulticlassDataset(Dataset):
-    def __init__(self, num_classes):
-        super().__init__(Task.MULTI_CLASSIFICATION)
+    def __init__(self, num_classes, **kwargs):
+        super().__init__(Task.MULTI_CLASSIFICATION, **kwargs)
         self.num_classes = num_classes
 
     def get_class(self, cls):
@@ -424,8 +424,8 @@ class MulticlassDataset(Dataset):
         return X, y
 
 class MultiBinClassDataset(Dataset):
-    def __init__(self, multiclass_dataset, class1, class2):
-        super().__init__(Task.CLASSIFICATION)
+    def __init__(self, multiclass_dataset, class1, class2, **kwargs):
+        super().__init__(Task.CLASSIFICATION, **kwargs)
         self.multi_dataset = multiclass_dataset
         if not isinstance(self.multi_dataset, MulticlassDataset):
             raise ValueError("not a multiclass dataset:",
@@ -450,9 +450,30 @@ class MultiBinClassDataset(Dataset):
     def name(self):
         return f"{super().name()}{self.class1}v{self.class2}"
 
+class OneVsAllDataset(Dataset):
+    def __init__(self, multiclass_dataset, class1, **kwargs):
+        super().__init__(Task.CLASSIFICATION, **kwargs)
+        self.multi_dataset = multiclass_dataset
+        if not isinstance(self.multi_dataset, MulticlassDataset):
+            raise ValueError("not a multiclass dataset:",
+                    self.multi_dataset.name())
+        if class1 not in range(self.multi_dataset.num_classes):
+            raise ValueError("invalid class1")
+        self.class1 = class1
+
+    def load_dataset(self):
+        if self.X is None or self.y is None:
+            self.multi_dataset.load_dataset()
+            self.X = self.multi_dataset.X
+            self.y = (self.multi_dataset.y==self.class1)
+            super().load_dataset()
+
+    def name(self):
+        return f"{self.multi_dataset.name()}{self.class1}vAll"
+
 class Calhouse(Dataset):
-    def __init__(self):
-        super().__init__(Task.REGRESSION)
+    def __init__(self, **kwargs):
+        super().__init__(Task.REGRESSION, **kwargs)
     
     def load_dataset(self):
         if self.X is None or self.y is None:
@@ -463,8 +484,8 @@ class Calhouse(Dataset):
 class Allstate(Dataset):
     dataset_name = "allstate.h5"
 
-    def __init__(self):
-        super().__init__(Task.REGRESSION)
+    def __init__(self, **kwargs):
+        super().__init__(Task.REGRESSION, **kwargs)
 
     def load_dataset(self):
         if self.X is None or self.y is None:
@@ -475,8 +496,8 @@ class Allstate(Dataset):
             super().load_dataset()
 
 class Covtype(Dataset):
-    def __init__(self):
-        super().__init__(Task.CLASSIFICATION)
+    def __init__(self, **kwargs):
+        super().__init__(Task.CLASSIFICATION, **kwargs)
 
     def load_dataset(self):
         if self.X is None or self.y is None:
@@ -485,8 +506,8 @@ class Covtype(Dataset):
             super().load_dataset()
 
 class CovtypeNormalized(Covtype):
-    def __init__(self):
-        super().__init__()
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
 
     def load_dataset(self):
         if self.X is None or self.y is None:
@@ -494,8 +515,8 @@ class CovtypeNormalized(Covtype):
             self.minmax_normalize()
 
 class Higgs(Dataset):
-    def __init__(self):
-        super().__init__(Task.CLASSIFICATION)
+    def __init__(self, **kwargs):
+        super().__init__(Task.CLASSIFICATION, **kwargs)
 
     def load_dataset(self):
         if self.X is None or self.y is None:
@@ -505,8 +526,8 @@ class Higgs(Dataset):
             super().load_dataset()
 
 class LargeHiggs(Dataset):
-    def __init__(self):
-        super().__init__()
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
 
     def load_dataset(self):
         if self.X is None or self.y is None:
@@ -520,8 +541,8 @@ class LargeHiggs(Dataset):
             super().load_dataset()
 
 class Mnist(MulticlassDataset):
-    def __init__(self):
-        super().__init__(num_classes=10)
+    def __init__(self, **kwargs):
+        super().__init__(num_classes=10, **kwargs)
 
     def load_dataset(self):
         if self.X is None or self.y is None:
@@ -531,16 +552,28 @@ class Mnist(MulticlassDataset):
     def xgb_params(self, task):
         params = Dataset.xgb_params(self, task)
         params["num_class"] = self.num_classes
+        params["subsample"] = 0.5
+        params["colsample_bytree"] = 0.5
         return params
 
 class MnistBinClass(MultiBinClassDataset):
-    def __init__(self, class1, class2):
-        super().__init__(Mnist(), class1, class2)
+    def __init__(self, class1, class2, **kwargs):
+        super().__init__(Mnist(), class1, class2, **kwargs)
 
     def xgb_params(self, task):
         params = Dataset.xgb_params(self, task)
         params["subsample"] = 0.5
         params["colsample_bytree"] = 0.8
+        return params
+
+class MnistKvAll(OneVsAllDataset):
+    def __init__(self, class1, **kwargs):
+        super().__init__(Mnist(), class1, **kwargs)
+
+    def xgb_params(self, task):
+        params = Dataset.xgb_params(self, task)
+        params["subsample"] = 0.5
+        params["colsample_bytree"] = 0.5
         return params
 
 # 0  T-shirt/top
@@ -554,8 +587,8 @@ class MnistBinClass(MultiBinClassDataset):
 # 8  Bag
 # 9  Ankle boot
 class FashionMnist(MulticlassDataset):
-    def __init__(self):
-        super().__init__(num_classes=10)
+    def __init__(self, **kwargs):
+        super().__init__(num_classes=10, **kwargs)
 
     def load_dataset(self):
         if self.X is None or self.y is None:
@@ -568,8 +601,8 @@ class FashionMnist(MulticlassDataset):
         return params
 
 class FashionMnistBinClass(MultiBinClassDataset):
-    def __init__(self, class1, class2):
-        super().__init__(FashionMnist(), class1, class2)
+    def __init__(self, class1, class2, **kwargs):
+        super().__init__(FashionMnist(), class1, class2, **kwargs)
 
 
     def xgb_params(self, task):
@@ -578,11 +611,21 @@ class FashionMnistBinClass(MultiBinClassDataset):
         params["colsample_bytree"] = 0.8
         return params
 
+class FashionMnistKvAll(OneVsAllDataset):
+    def __init__(self, class1, **kwargs):
+        super().__init__(FashionMnist(), class1, **kwargs)
+
+    def xgb_params(self, task):
+        params = Dataset.xgb_params(self, task)
+        params["subsample"] = 0.5
+        params["colsample_bytree"] = 0.5
+        return params
+
 class Ijcnn1(Dataset):
     dataset_name = "ijcnn1.h5"
 
-    def __init__(self):
-        super().__init__(Task.CLASSIFICATION)
+    def __init__(self, **kwargs):
+        super().__init__(Task.CLASSIFICATION, **kwargs)
 
     def load_dataset(self):
         if self.X is None or self.y is None:
@@ -604,7 +647,7 @@ class Ijcnn1(Dataset):
 class Webspam(Dataset):
     dataset_name = "webspam_wc_normalized_unigram.h5"
 
-    def __init__(self):
+    def __init__(self, **kwargs):
         super().__init__(Task.CLASSIFICATION)
 
     def load_dataset(self):
@@ -617,8 +660,8 @@ class Webspam(Dataset):
             super().load_dataset()
 
 class BreastCancer(Dataset):
-    def __init__(self):
-        super().__init__(Task.CLASSIFICATION)
+    def __init__(self, **kwargs):
+        super().__init__(Task.CLASSIFICATION, **kwargs)
 
     def _transform_X_y(self, X, y):
         y = (y == 'malignant')
@@ -631,8 +674,8 @@ class BreastCancer(Dataset):
             super().load_dataset()
 
 class BreastCancerNormalized(BreastCancer):
-    def __init__(self):
-        super().__init__()
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
 
     def load_dataset(self):
         if self.X is None or self.y is None:
@@ -640,8 +683,8 @@ class BreastCancerNormalized(BreastCancer):
             self.minmax_normalize()
 
 class Adult(Dataset):
-    def __init__(self):
-        super().__init__(Task.CLASSIFICATION)
+    def __init__(self, **kwargs):
+        super().__init__(Task.CLASSIFICATION, **kwargs)
 
     def _transform_X_y(self, X, y):
         X["workclass"] = (X.workclass=="private")
@@ -664,8 +707,8 @@ class Adult(Dataset):
             super().load_dataset()
         
 class KddCup99(Dataset):
-    def __init__(self):
-        super().__init__(Task.CLASSIFICATION)
+    def __init__(self, **kwargs):
+        super().__init__(Task.CLASSIFICATION, **kwargs)
 
     def _transform_X_y(self, X, y):
         X["service_ecr_i"] = (X.service == "ecr_i")
@@ -693,8 +736,8 @@ class KddCup99(Dataset):
         return params
 
 class Vehicle(Dataset):
-    def __init__(self):
-        super().__init__(Task.CLASSIFICATION)
+    def __init__(self, **kwargs):
+        super().__init__(Task.CLASSIFICATION, **kwargs)
 
     def _transform_X_y(self, X, y):
         y = (y == "bus") | (y == "van")
@@ -705,3 +748,75 @@ class Vehicle(Dataset):
             self.X, self.y = self._load_openml("vehicle", data_id=54)
             self.minmax_normalize()
             super().load_dataset()
+
+class SoccerFRA(Dataset):
+    dataset_name = "spadl-whoscored-FRA-xg.h5"
+    def __init__(self, **kwargs):
+        super().__init__(Task.CLASSIFICATION, **kwargs)
+
+    def load_dataset(self):
+        if self.X is None or self.y is None:
+            data_path = os.path.join(self.data_dir, self.dataset_name)
+            self.X = pd.read_hdf(data_path, key="X").reset_index(drop=True)
+            self.y = pd.read_hdf(data_path, key="y").reset_index(drop=True)
+            self.minmax_normalize()
+            super().load_dataset()
+
+    def xgb_params(self, task):
+        params = Dataset.xgb_params(self, task)
+        params["subsample"] = 0.5
+        params["colsample_bytree"] = 0.8
+        return params
+
+    def _apply_rev_map(self, series, m):
+        values = self.X[series].unique()
+        values.sort()
+        if len(values) == len(m): # default value of 0.0 never used
+            print("yo")
+        elif len(values) == len(m)+1: # default value was used
+            print("yoyo")
+        else:
+            raise RuntimeError("should not happen", len(values), len(m))
+
+    def map_to_categories(self, X):
+        actiongroup0 = {
+            "shot": 1.0,
+            "dribble": 2.0,
+            "pass": 3.0,
+            "cross": 4.0,
+            "clearance": 5.0,
+            "tackle": 6.0,
+            "take_on": 7.0,
+            "interception": 8.0,
+        }
+        actiongroup1 = {
+            "keeper_punch": 1.0,
+            "keeper_pick_up": 2.0,
+            "keeper_claim": 3.0,
+            "keeper_save": 4.0,
+        }
+
+        actiongroup2 = {
+            "throw_in": 1.0,
+            "corner_short": 2.0,
+            "corner_crossed": 3.0,
+        }
+
+        actiongroup3 = {
+            "bad_touch": 1.0,
+            "foul": 2.0,
+            "shot_freekick": 3.0,
+            "goalkick": 4.0,
+            "freekick_crossed": 5.0,
+            "freekick_short": 6.0,
+            "shot_penalty": 7.0,
+        }
+
+        bodypart = {
+            "foot": 1.0,
+            "other": 2.0,
+            "head/other": 2.5,
+            "head": 3.0,
+        }
+
+        self._apply_rev_map("actiongroup0_a1", actiongroup0)
