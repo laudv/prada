@@ -749,6 +749,34 @@ class Vehicle(Dataset):
             self.minmax_normalize()
             super().load_dataset()
 
+class Phoneme(Dataset):
+    def __init__(self, **kwargs):
+        super().__init__(Task.CLASSIFICATION, **kwargs)
+
+    def _transform_X_y(self, X, y):
+        y = (y == "2") # y values are in ['1', '2'] -> transform to binary
+        return X, y
+
+    def load_dataset(self):
+        if self.X is None or self.y is None:
+            self.X, self.y = self._load_openml("phoneme", data_id=1489)
+            self.minmax_normalize()
+            super().load_dataset()
+
+class Spambase(Dataset):
+    def __init__(self, **kwargs):
+        super().__init__(Task.CLASSIFICATION, **kwargs)
+
+    def _transform_X_y(self, X, y):
+        y = (y == "1") # y values are in ['0', '1'] -> transform to binary
+        return X, y
+
+    def load_dataset(self):
+        if self.X is None or self.y is None:
+            self.X, self.y = self._load_openml("spambase", data_id=44)
+            self.minmax_normalize()
+            super().load_dataset()
+
 class SoccerFRA(Dataset):
     dataset_name = "spadl-whoscored-FRA-xg.h5"
     def __init__(self, **kwargs):
