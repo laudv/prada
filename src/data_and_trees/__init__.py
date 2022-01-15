@@ -22,6 +22,12 @@ try:
     VERITAS_SUPPORT = True
 finally: pass
 
+GROOT_SUPPORT = False
+try:
+    import groot.model
+    GROOT_SUPPORT = True
+finally: pass
+
 MODEL_DIR = os.environ["DATA_AND_TREES_MODEL_DIR"]
 DATA_DIR = os.environ["DATA_AND_TREES_DATA_DIR"]
 NTHREADS = os.cpu_count()
@@ -79,6 +85,9 @@ class Dataset:
     def rf_params(self):
         return { "n_jobs": self.nthreads }
 
+    def groot_params(self):
+        return { "n_jobs": self.nthreads }
+
     def extra_trees_params(self):
         return { "n_jobs": self.nthreads }
 
@@ -117,6 +126,9 @@ class Dataset:
                         nclasses, feat2id)
             else:
                 return veritas.addtree_from_xgb_model(model, feat2id)
+        elif GROOT_SUPPORT and \
+                isinstance(model, groot.model.GrootRandomForestClassifier):
+            return veritas.addtree_from_groot_ensemble(model)
         else:
             if self.task == Task.MULTI_CLASSIFICATION:
                 nclasses = self.num_classes
@@ -150,6 +162,7 @@ class Dataset:
         lr = learning_rate
         model_name = self.get_model_name(fold, "xgb", num_trees, tree_depth, lr=f"{lr*100:.0f}")
         model_path = os.path.join(self.model_dir, model_name)
+        print("xgb_model_path", model_path)
         if os.path.isfile(model_path):
             print(f"loading XGB model from file: {model_path}")
             model, meta = joblib.load(model_path)
@@ -164,8 +177,10 @@ class Dataset:
             params["max_depth"] = tree_depth
             params["learning_rate"] = learning_rate
 
+            t = time.time()
             model = xgb.train(params, dtrain, num_boost_round=num_trees,
                               evals=[(dtrain, "train"), (dtest, "test")])
+            t = time.time() - t
 
             if self.task == Task.REGRESSION:
                 metric = metrics.mean_squared_error(model.predict(dtest), ytest)
@@ -184,6 +199,7 @@ class Dataset:
                 "task": self.task,
                 "metric": (metric_name, metric),
                 "lr": lr,
+                "training_time": t,
             }
             joblib.dump((model, meta), model_path)
             return model, meta
@@ -243,6 +259,7 @@ class Dataset:
             params["n_estimators"] = num_trees
             params["max_depth"] = tree_depth
 
+            t = time.time()
             if self.task == Task.REGRESSION:
                 model = RandomForestRegressor(**params).fit(Xtrain, ytrain)
                 metric = metrics.mean_squared_error(model.predict(Xtest), ytest)
@@ -252,6 +269,7 @@ class Dataset:
                 model = RandomForestClassifier(**params).fit(Xtrain, ytrain)
                 metric = metrics.accuracy_score(model.predict(Xtest), ytest)
                 metric_name = "acc"
+            t = time.time() - t
 
             meta = {
                 "params": params,
@@ -260,10 +278,52 @@ class Dataset:
                 "columns": self.X.columns,
                 "task": self.task,
                 "metric": (metric_name, metric),
+                "training_time": t
             }
             joblib.dump((model, meta), model_path)
         return model, meta
 
+    def get_groot_model(self, fold, num_trees, tree_depth, epsilon):
+        if not GROOT_SUPPORT:
+            raise RuntimeError("GROOT not installed")
+        model_name = self.get_model_name(fold, "groot", num_trees, tree_depth,
+                epsilon=str(np.round(epsilon, 4)))
+        model_path = os.path.join(self.model_dir, model_name)
+        if os.path.isfile(model_path):
+            print(f"loading GROOT model from file: {model_name}")
+            model, meta = joblib.load(model_path)
+        else:
+            self.load_dataset()
+            Xtrain, ytrain, Xtest, ytest = self.train_and_test_set(fold)
+
+            params = self.groot_params()
+            params["n_estimators"] = num_trees
+            params["max_depth"] = tree_depth
+            params["attack_model"] = np.ones(Xtrain.shape[1]) * epsilon
+
+            t = time.time()
+            if self.task == Task.REGRESSION:
+                raise RuntimeError("not supported yet")
+            else:
+                model = groot.model.GrootRandomForestClassifier(**params)
+                model.fit(Xtrain, ytrain)
+                metric = metrics.accuracy_score(model.predict(Xtest), ytest)
+                metric_name = "acc"
+            t = time.time() - t
+
+            meta = {
+                "params": params,
+                "num_trees": num_trees,
+                "tree_depth": tree_depth,
+                "columns": self.X.columns,
+                "task": self.task,
+                "metric": (metric_name, metric),
+                "training_time": t,
+            }
+            joblib.dump((model, meta), model_path)
+        return model, meta
+
+    # TODO update to fold
     def get_extra_trees_model(self, num_trees, tree_depth):
         model_name = self.get_model_name("et", num_trees, tree_depth)
         model_path = os.path.join(self.model_dir, model_name)
@@ -373,7 +433,6 @@ class Dataset:
         a = "-".join(f"{k}{v}" for k, v in kwargs.items())
         return f"{self.name()}-seed{self.seed}-fold{fold}_{num_trees}-{tree_depth}{a}.{model_type}"
 
-
     def minmax_normalize(self):
         if self.X is None:
             raise RuntimeError("data not loaded")
@@ -481,6 +540,17 @@ class Calhouse(Dataset):
             self.y = np.log(self.y)
             super().load_dataset()
 
+class CalhouseClf(Dataset):
+    def __init__(self, **kwargs):
+        super().__init__(Task.CLASSIFICATION, **kwargs)
+    
+    def load_dataset(self):
+        if self.X is None or self.y is None:
+            self.X, self.y = self._load_openml("calhouse", data_id=537)
+            self.threshold = np.median(self.y)
+            self.y = self.y > self.threshold
+            super().load_dataset()
+
 class Allstate(Dataset):
     dataset_name = "allstate.h5"
 
@@ -493,6 +563,21 @@ class Allstate(Dataset):
             data = pd.read_hdf(allstate_data_path)
             self.X = data.drop(columns=["loss"])
             self.y = data.loss
+            super().load_dataset()
+
+class AllstateClf(Dataset):
+    dataset_name = "allstate.h5"
+
+    def __init__(self, **kwargs):
+        super().__init__(Task.REGRESSION, **kwargs)
+
+    def load_dataset(self):
+        if self.X is None or self.y is None:
+            allstate_data_path = os.path.join(self.data_dir, Allstate.dataset_name)
+            data = pd.read_hdf(allstate_data_path)
+            self.X = data.drop(columns=["loss"])
+            self.threshold = np.median(data.loss)
+            self.y = data.loss > self.threshold
             super().load_dataset()
 
 class Covtype(Dataset):
@@ -523,6 +608,7 @@ class Higgs(Dataset):
             higgs_data_path = os.path.join(self.data_dir, "higgs.h5")
             self.X = pd.read_hdf(higgs_data_path, "X")
             self.y = pd.read_hdf(higgs_data_path, "y")
+            self.minmax_normalize()
             super().load_dataset()
 
 class LargeHiggs(Dataset):
@@ -648,7 +734,7 @@ class Webspam(Dataset):
     dataset_name = "webspam_wc_normalized_unigram.h5"
 
     def __init__(self, **kwargs):
-        super().__init__(Task.CLASSIFICATION)
+        super().__init__(Task.CLASSIFICATION, **kwargs)
 
     def load_dataset(self):
         if self.X is None or self.y is None:
