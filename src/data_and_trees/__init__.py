@@ -249,12 +249,13 @@ class Dataset:
         # call _get_xgb_model with model comparison for lr optimization
         raise RuntimeError("override in subclass")
 
-    def get_rf_model(self, num_trees, tree_depth, seed, current_fold_nb=0, max_fold=0):
+    def get_rf_model(self, num_trees, tree_depth, seed, current_fold_nb=0, max_fold=0, discretized=False,
+                     binning_mode="", nb_bins=0):
         if max_fold == 0:
-            model_name = self.get_model_name("rf", num_trees, tree_depth, seed)
+            model_name = self.get_model_name("rf", num_trees, tree_depth, seed, discretized, binning_mode, nb_bins)
         else:
             model_name = self.get_model_name_cross_validation("rf", num_trees, tree_depth, seed, current_fold_nb,
-                                                              max_fold)
+                                                              max_fold, discretized, binning_mode, nb_bins)
         model_path = os.path.join(self.model_dir, model_name)
         if os.path.isfile(model_path):
             # print(f"loading RF model from file: {model_name}")
@@ -340,11 +341,16 @@ class Dataset:
             joblib.dump(kdtree, model_path)
         return kdtree
 
-    def get_model_name(self, model_type, num_trees, tree_depth, seed=39482):
-        return f"{self.name()}{self.name_suffix}-{num_trees}-{tree_depth}-{seed}.{model_type}"
+    def get_model_name(self, model_type, num_trees, tree_depth, seed=39482, discretized=False, binning_mode="",
+                       nb_bins=0):
+        discr_suffix = "-discretized_" + binning_mode + "_" + str(nb_bins) if discretized else ""
+        return f"{self.name()}{self.name_suffix}-{num_trees}-{tree_depth}-{seed}{discr_suffix}.{model_type}"
 
-    def get_model_name_cross_validation(self, model_type, num_trees, tree_depth, seed, current_fold_nb, max_fold):
-        return f"{self.name()}{self.name_suffix}-{num_trees}-{tree_depth}-{seed}-{current_fold_nb}of{max_fold}.{model_type}"
+    def get_model_name_cross_validation(self, model_type, num_trees, tree_depth, seed, current_fold_nb, max_fold,
+                                        discretized=False, binning_mode="", nb_bins=0):
+        discr_suffix = "-discretized_" + binning_mode + "_" + str(nb_bins) if discretized else ""
+        return f"{self.name()}{self.name_suffix}-{num_trees}-{tree_depth}-{seed}-{current_fold_nb}of{max_fold}" \
+               f"{discr_suffix}.{model_type}"
 
     def minmax_normalize(self):
         if self.X is None:
