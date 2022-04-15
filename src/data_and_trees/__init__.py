@@ -3,6 +3,8 @@ import joblib
 import enum
 import numpy as np
 import pandas as pd
+import multiprocessing
+import time
 
 import sklearn.metrics as metrics
 from sklearn import preprocessing
@@ -16,19 +18,23 @@ from functools import partial
 import xgboost as xgb
 
 VERITAS_SUPPORT = False
-try: 
+try:
     import veritas
+
     VERITAS_SUPPORT = True
-finally: pass
+finally:
+    pass
 
 MODEL_DIR = os.environ["DATA_AND_TREES_MODEL_DIR"]
 DATA_DIR = os.environ["DATA_AND_TREES_DATA_DIR"]
 NTHREADS = os.cpu_count()
 
+
 class Task(enum.Enum):
     REGRESSION = 1
     CLASSIFICATION = 2
     MULTI_CLASSIFICATION = 3
+
 
 class Dataset:
     def __init__(self, task, name_suffix=""):
@@ -37,7 +43,7 @@ class Dataset:
         self.data_dir = DATA_DIR
         self.nthreads = NTHREADS
 
-        self.name_suffix = name_suffix # special parameters, name indication
+        self.name_suffix = name_suffix  # special parameters, name indication
         self.X = None
         self.y = None
         self.Itrain = None
@@ -52,7 +58,7 @@ class Dataset:
 
     def xgb_params(self, task, custom_params={}):
         if task == Task.REGRESSION:
-            params = { # defaults
+            params = {  # defaults
                 "objective": "reg:squarederror",
                 "eval_metric": "rmse",
                 "tree_method": "hist",
@@ -60,7 +66,7 @@ class Dataset:
                 "nthread": self.nthreads,
             }
         elif task == Task.CLASSIFICATION:
-            params = { # defaults
+            params = {  # defaults
                 "objective": "binary:logistic",
                 "eval_metric": "error",
                 "tree_method": "hist",
@@ -91,7 +97,7 @@ class Dataset:
         params["n_jobs"] = self.nthreads
         return params
 
-    def load_dataset(self): # populate X, y
+    def load_dataset(self):  # populate X, y
         raise RuntimeError("not implemented")
 
     def to_float32(self):
@@ -110,7 +116,7 @@ class Dataset:
             np.random.seed(seed)
             indices = np.random.permutation(self.X.shape[0])
 
-            m = int(self.X.shape[0]*split_fraction)
+            m = int(self.X.shape[0] * split_fraction)
             self.Itrain = indices[0:m]
             self.Itest = indices[m:]
 
@@ -142,19 +148,19 @@ class Dataset:
         if not VERITAS_SUPPORT:
             raise RuntimeError("Veritas not installed")
         if isinstance(model, xgb.Booster):
-            feat2id_dict = { s: i for i, s in enumerate(meta["columns"]) }
+            feat2id_dict = {s: i for i, s in enumerate(meta["columns"])}
             feat2id = feat2id_dict.__getitem__
             if self.task == Task.MULTI_CLASSIFICATION:
                 nclasses = self.num_classes
                 return veritas.addtrees_from_multiclass_xgb_model(model,
-                        nclasses, feat2id)
+                                                                  nclasses, feat2id)
             else:
                 return veritas.addtree_from_xgb_model(model, feat2id)
         else:
             if self.task == Task.MULTI_CLASSIFICATION:
                 nclasses = self.num_classes
                 return veritas.addtrees_from_multiclass_sklearn_ensemble(model,
-                        nclasses)
+                                                                         nclasses)
             else:
                 return veritas.addtree_from_sklearn_ensemble(model)
 
@@ -188,7 +194,7 @@ class Dataset:
         if os.path.isfile(model_path):
             print(f"loading XGB model from file: {model_name}")
             model, meta = joblib.load(model_path)
-        else: # train model
+        else:  # train model
             self.load_dataset()
             self.train_and_test_set()
 
@@ -333,7 +339,7 @@ class Dataset:
             kdtree = KDTree(self.Xtrain)
             joblib.dump(kdtree, model_path)
         return kdtree
-        
+
     def get_model_name(self, model_type, num_trees, tree_depth, seed=39482):
         return f"{self.name()}{self.name_suffix}-{num_trees}-{tree_depth}-{seed}.{model_type}"
 
@@ -350,21 +356,62 @@ class Dataset:
         df = pd.DataFrame(X_scaled, columns=self.X.columns)
         self.X = df
 
+    def discretize(self, nb_bins: int = 10, mode: str = "equal_width") -> None:
+        """
+        Discretize the entire dataset. The mode "equal_width" has evenly spaced bins with equal width, calculated from
+        the maximum and minimum of the corresponding column. The mode "equal_height" has bins with more or less the same
+        height by dividing the values in the corresponding column evenly across the bins.
+        :param nb_bins: the number of bins for each column in the dataset
+        :param mode: "equal_width" (default) or "equal_height"
+        :return: None
+        """
+        def get_bins(col: np.array) -> np.array:
+            if mode == "equal_width":
+                return np.linspace(col.min(), col.max(), nb_bins)
+            elif mode == "equal_height":
+                npt = len(col)
+                return np.interp(np.linspace(0, npt, nb_bins),
+                                 np.arange(npt),
+                                 np.sort(col))
+            else:
+                raise Exception("Invalid binning mode for discretizing the dataset")
+
+        def discretize_col(c: int):
+            time.sleep(1)
+            col = self.X.iloc[:, c]
+            bins = get_bins(col)
+            return np.digitize(col, bins)
+
+            # self.X["extra" + str(c)] = dis_X
+
+        # for c in range(self.X.shape[1]):
+        #     discretize_col(c)
+
+        outputs = joblib.Parallel(n_jobs=multiprocessing.cpu_count())(
+            joblib.delayed(discretize_col)(c) for c in range(self.X.shape[1]))
+
+        for i, c in enumerate(self.X.columns):
+            self.X[c] = outputs[i]
+
+
 def _rmse_metric(self, model, best_m):
     yhat = model.predict(self.dtest, output_margin=True)
     m = metrics.mean_squared_error(yhat, self.ytest)
     m = np.sqrt(m)
     return m if best_m is None or m < best_m else best_m
 
+
 def _acc_metric(self, model, best_m):
     yhat = model.predict(self.dtest, output_margin=True)
     m = metrics.accuracy_score(yhat > 0.0, self.ytest)
     return m if best_m is None or m > best_m else best_m
 
+
 def _multi_acc_metric(self, model, best_m):
     yhat = model.predict(self.dtest)
     m = metrics.accuracy_score(yhat, self.ytest)
     return m if best_m is None or m > best_m else best_m
+
 
 class MulticlassDataset(Dataset):
     def __init__(self, num_classes):
@@ -389,13 +436,14 @@ class MulticlassDataset(Dataset):
         y.reset_index(inplace=True, drop=True)
         return X, y
 
+
 class MultiBinClassDataset(Dataset):
     def __init__(self, multiclass_dataset, class1, class2):
         super().__init__(Task.CLASSIFICATION)
         self.multi_dataset = multiclass_dataset
         if not isinstance(self.multi_dataset, MulticlassDataset):
             raise ValueError("not a multiclass dataset:",
-                    self.multi_dataset.name())
+                             self.multi_dataset.name())
         if class1 not in range(self.multi_dataset.num_classes):
             raise ValueError("invalid class1")
         if class2 not in range(self.multi_dataset.num_classes):
@@ -410,15 +458,16 @@ class MultiBinClassDataset(Dataset):
             self.multi_dataset.load_dataset()
             X, y = self.multi_dataset.get_class((self.class1, self.class2))
             self.X = X
-            self.y = (y==self.class2)
+            self.y = (y == self.class2)
 
     def name(self):
         return f"{super().name()}{self.class1}v{self.class2}"
 
+
 class Calhouse(Dataset):
     def __init__(self):
         super().__init__(Task.REGRESSION)
-    
+
     def load_dataset(self):
         if self.X is None or self.y is None:
             self.X, self.y = self._load_openml("calhouse", data_id=537)
@@ -427,7 +476,9 @@ class Calhouse(Dataset):
     def get_xgb_model(self, num_trees, tree_depth, current_fold_nb=0, max_fold=0):
         custom_params = {}
         return super()._get_xgb_model(num_trees, tree_depth,
-                partial(_rmse_metric, self), "rmse", custom_params, current_fold_nb=current_fold_nb, max_fold=max_fold)
+                                      partial(_rmse_metric, self), "rmse", custom_params,
+                                      current_fold_nb=current_fold_nb, max_fold=max_fold)
+
 
 class Allstate(Dataset):
     dataset_name = "allstate.h5"
@@ -445,7 +496,9 @@ class Allstate(Dataset):
     def get_xgb_model(self, num_trees, tree_depth, current_fold_nb=0, max_fold=0):
         custom_params = {}
         return super()._get_xgb_model(num_trees, tree_depth,
-                partial(_rmse_metric, self), "rmse", custom_params, current_fold_nb=current_fold_nb, max_fold=max_fold)
+                                      partial(_rmse_metric, self), "rmse", custom_params,
+                                      current_fold_nb=current_fold_nb, max_fold=max_fold)
+
 
 class Covtype(Dataset):
     def __init__(self):
@@ -454,12 +507,14 @@ class Covtype(Dataset):
     def load_dataset(self):
         if self.X is None or self.y is None:
             self.X, self.y = self._load_openml("covtype", data_id=1596)
-            self.y = (self.y==2)
+            self.y = (self.y == 2)
 
     def get_xgb_model(self, num_trees, tree_depth, current_fold_nb=0, max_fold=0):
         custom_params = {}
         return super()._get_xgb_model(num_trees, tree_depth,
-                partial(_acc_metric, self), "acc", custom_params, current_fold_nb=current_fold_nb, max_fold=max_fold)
+                                      partial(_acc_metric, self), "acc", custom_params, current_fold_nb=current_fold_nb,
+                                      max_fold=max_fold)
+
 
 class CovtypeNormalized(Covtype):
     def __init__(self):
@@ -469,6 +524,7 @@ class CovtypeNormalized(Covtype):
         if self.X is None or self.y is None:
             super().load_dataset()
             self.minmax_normalize()
+
 
 class Higgs(Dataset):
     def __init__(self):
@@ -483,7 +539,9 @@ class Higgs(Dataset):
     def get_xgb_model(self, num_trees, tree_depth, current_fold_nb=0, max_fold=0):
         custom_params = {}
         return super()._get_xgb_model(num_trees, tree_depth,
-                partial(_acc_metric, self), "acc", custom_params, current_fold_nb=current_fold_nb, max_fold=max_fold)
+                                      partial(_acc_metric, self), "acc", custom_params, current_fold_nb=current_fold_nb,
+                                      max_fold=max_fold)
+
 
 class LargeHiggs(Dataset):
     def __init__(self):
@@ -502,7 +560,9 @@ class LargeHiggs(Dataset):
     def get_xgb_model(self, num_trees, tree_depth, current_fold_nb=0, max_fold=0):
         custom_params = {}
         return super()._get_xgb_model(num_trees, tree_depth,
-                partial(_acc_metric, self), "acc", custom_params, current_fold_nb=current_fold_nb, max_fold=max_fold)
+                                      partial(_acc_metric, self), "acc", custom_params, current_fold_nb=current_fold_nb,
+                                      max_fold=max_fold)
+
 
 class Mnist(MulticlassDataset):
     def __init__(self):
@@ -517,9 +577,11 @@ class Mnist(MulticlassDataset):
             "num_class": self.num_classes,
         }
         return super()._get_xgb_model(num_trees, tree_depth,
-                partial(_multi_acc_metric, self), "macc", custom_params, current_fold_nb=current_fold_nb, max_fold=max_fold)
+                                      partial(_multi_acc_metric, self), "macc", custom_params,
+                                      current_fold_nb=current_fold_nb, max_fold=max_fold)
 
-#class MnistNormalized(Mnist):
+
+# class MnistNormalized(Mnist):
 #    def __init__(self):
 #        super().__init__()
 #
@@ -538,7 +600,9 @@ class MnistBinClass(MultiBinClassDataset):
             "colsample_bytree": 0.8,
         }
         return super()._get_xgb_model(num_trees, tree_depth,
-                partial(_acc_metric, self), "acc", custom_params, current_fold_nb=current_fold_nb, max_fold=max_fold)
+                                      partial(_acc_metric, self), "acc", custom_params, current_fold_nb=current_fold_nb,
+                                      max_fold=max_fold)
+
 
 # 0  T-shirt/top
 # 1  Trouser
@@ -563,7 +627,9 @@ class FashionMnist(MulticlassDataset):
             "num_class": self.num_classes,
         }
         return super()._get_xgb_model(num_trees, tree_depth,
-                partial(_multi_acc_metric, self), "macc", custom_params, current_fold_nb=current_fold_nb, max_fold=max_fold)
+                                      partial(_multi_acc_metric, self), "macc", custom_params,
+                                      current_fold_nb=current_fold_nb, max_fold=max_fold)
+
 
 class FashionMnistBinClass(MultiBinClassDataset):
     def __init__(self, class1, class2):
@@ -575,7 +641,9 @@ class FashionMnistBinClass(MultiBinClassDataset):
             "colsample_bytree": 0.8,
         }
         return super()._get_xgb_model(num_trees, tree_depth,
-                partial(_acc_metric, self), "acc", custom_params, current_fold_nb=current_fold_nb, max_fold=max_fold)
+                                      partial(_acc_metric, self), "acc", custom_params, current_fold_nb=current_fold_nb,
+                                      max_fold=max_fold)
+
 
 class Ijcnn1(Dataset):
     dataset_name = "ijcnn1.h5"
@@ -600,9 +668,11 @@ class Ijcnn1(Dataset):
             self.minmax_normalize()
 
     def get_xgb_model(self, num_trees, tree_depth, current_fold_nb=0, max_fold=0):
-        custom_params = { }
+        custom_params = {}
         return super()._get_xgb_model(num_trees, tree_depth,
-                partial(_acc_metric, self), "acc", custom_params, current_fold_nb=current_fold_nb, max_fold=max_fold)
+                                      partial(_acc_metric, self), "acc", custom_params, current_fold_nb=current_fold_nb,
+                                      max_fold=max_fold)
+
 
 class Webspam(Dataset):
     dataset_name = "webspam_wc_normalized_unigram.h5"
@@ -619,9 +689,11 @@ class Webspam(Dataset):
             self.minmax_normalize()
 
     def get_xgb_model(self, num_trees, tree_depth, current_fold_nb=0, max_fold=0):
-        custom_params = { }
+        custom_params = {}
         return super()._get_xgb_model(num_trees, tree_depth,
-                partial(_acc_metric, self), "acc", custom_params, current_fold_nb=current_fold_nb, max_fold=max_fold)
+                                      partial(_acc_metric, self), "acc", custom_params, current_fold_nb=current_fold_nb,
+                                      max_fold=max_fold)
+
 
 class BreastCancer(Dataset):
     def __init__(self):
@@ -637,7 +709,9 @@ class BreastCancer(Dataset):
     def get_xgb_model(self, num_trees, tree_depth, current_fold_nb=0, max_fold=0):
         custom_params = {}
         return super()._get_xgb_model(num_trees, tree_depth,
-                partial(_acc_metric, self), "acc", custom_params, current_fold_nb=current_fold_nb, max_fold=max_fold)
+                                      partial(_acc_metric, self), "acc", custom_params, current_fold_nb=current_fold_nb,
+                                      max_fold=max_fold)
+
 
 class BreastCancerNormalized(BreastCancer):
     def __init__(self):
@@ -647,6 +721,7 @@ class BreastCancerNormalized(BreastCancer):
         if self.X is None or self.y is None:
             super().load_dataset()
             self.minmax_normalize()
+
 
 class GinaAgnostic(Dataset):
     def __init__(self):
@@ -661,7 +736,9 @@ class GinaAgnostic(Dataset):
     def get_xgb_model(self, num_trees, tree_depth, current_fold_nb=0, max_fold=0):
         custom_params = {}
         return super()._get_xgb_model(num_trees, tree_depth,
-                partial(_acc_metric, self), "acc", custom_params, current_fold_nb=current_fold_nb, max_fold=max_fold)
+                                      partial(_acc_metric, self), "acc", custom_params, current_fold_nb=current_fold_nb,
+                                      max_fold=max_fold)
+
 
 class GinaAgnosticNormalized(GinaAgnostic):
     def __init__(self):
@@ -671,6 +748,7 @@ class GinaAgnosticNormalized(GinaAgnostic):
         if self.X is None or self.y is None:
             super().load_dataset()
             self.minmax_normalize()
+
 
 class Scene(Dataset):
     def __init__(self):
@@ -685,7 +763,9 @@ class Scene(Dataset):
     def get_xgb_model(self, num_trees, tree_depth, current_fold_nb=0, max_fold=0):
         custom_params = {}
         return super()._get_xgb_model(num_trees, tree_depth,
-                partial(_acc_metric, self), "acc", custom_params, current_fold_nb=current_fold_nb, max_fold=max_fold)
+                                      partial(_acc_metric, self), "acc", custom_params, current_fold_nb=current_fold_nb,
+                                      max_fold=max_fold)
+
 
 class SceneNormalized(Scene):
     def __init__(self):
@@ -695,6 +775,7 @@ class SceneNormalized(Scene):
         if self.X is None or self.y is None:
             super().load_dataset()
             self.minmax_normalize()
+
 
 class MonksProblem2(Dataset):
     def __init__(self):
@@ -709,7 +790,9 @@ class MonksProblem2(Dataset):
     def get_xgb_model(self, num_trees, tree_depth, current_fold_nb=0, max_fold=0):
         custom_params = {}
         return super()._get_xgb_model(num_trees, tree_depth,
-                partial(_acc_metric, self), "acc", custom_params, current_fold_nb=current_fold_nb, max_fold=max_fold)
+                                      partial(_acc_metric, self), "acc", custom_params, current_fold_nb=current_fold_nb,
+                                      max_fold=max_fold)
+
 
 class MonksProblem2Normalized(MonksProblem2):
     def __init__(self):
@@ -719,6 +802,7 @@ class MonksProblem2Normalized(MonksProblem2):
         if self.X is None or self.y is None:
             super().load_dataset()
             self.minmax_normalize()
+
 
 class TicTacToe(Dataset):
     def __init__(self):
@@ -737,7 +821,9 @@ class TicTacToe(Dataset):
     def get_xgb_model(self, num_trees, tree_depth, current_fold_nb=0, max_fold=0):
         custom_params = {}
         return super()._get_xgb_model(num_trees, tree_depth,
-                partial(_acc_metric, self), "acc", custom_params, current_fold_nb=current_fold_nb, max_fold=max_fold)
+                                      partial(_acc_metric, self), "acc", custom_params, current_fold_nb=current_fold_nb,
+                                      max_fold=max_fold)
+
 
 class TicTacToeNormalized(TicTacToe):
     def __init__(self):
@@ -748,13 +834,16 @@ class TicTacToeNormalized(TicTacToe):
             super().load_dataset()
             self.minmax_normalize()
 
+
 class Yeast(MulticlassDataset):
     """
     The target classes are (the first one occurs the most often): CYT, NUC, MIT, ME3, ME2, ME1, EXC, VAC, POX, ERL.
     """
+
     def __init__(self):
         super().__init__(num_classes=10)
-        self._classes = {"CYT": 0, "NUC": 1, "MIT": 2, "ME3": 3, "ME2": 4, "ME1": 5, "EXC": 6, "VAC": 7, "POX": 8, "ERL": 9}
+        self._classes = {"CYT": 0, "NUC": 1, "MIT": 2, "ME3": 3, "ME2": 4, "ME1": 5, "EXC": 6, "VAC": 7, "POX": 8,
+                         "ERL": 9}
 
     def load_dataset(self):
         if self.X is None or self.y is None:
@@ -766,7 +855,9 @@ class Yeast(MulticlassDataset):
             "num_class": self.num_classes,
         }
         return super()._get_xgb_model(num_trees, tree_depth,
-                partial(_multi_acc_metric, self), "macc", custom_params, current_fold_nb=current_fold_nb, max_fold=max_fold)
+                                      partial(_multi_acc_metric, self), "macc", custom_params,
+                                      current_fold_nb=current_fold_nb, max_fold=max_fold)
+
 
 class YeastMnistBinClass(MultiBinClassDataset):
     def __init__(self, class1, class2):
@@ -778,7 +869,9 @@ class YeastMnistBinClass(MultiBinClassDataset):
             "colsample_bytree": 0.8,
         }
         return super()._get_xgb_model(num_trees, tree_depth,
-                partial(_acc_metric, self), "acc", custom_params, current_fold_nb=current_fold_nb, max_fold=max_fold)
+                                      partial(_acc_metric, self), "acc", custom_params, current_fold_nb=current_fold_nb,
+                                      max_fold=max_fold)
+
 
 class YeastNormalizedMnistBinClass(YeastMnistBinClass):
     def __init__(self, class1, class2):
@@ -788,6 +881,7 @@ class YeastNormalizedMnistBinClass(YeastMnistBinClass):
         if self.X is None or self.y is None:
             super().load_dataset()
             self.minmax_normalize()
+
 
 class Adult(Dataset):
     def __init__(self):
@@ -808,7 +902,9 @@ class Adult(Dataset):
     def get_xgb_model(self, num_trees, tree_depth, current_fold_nb=0, max_fold=0):
         custom_params = {}
         return super()._get_xgb_model(num_trees, tree_depth,
-                partial(_acc_metric, self), "acc", custom_params, current_fold_nb=current_fold_nb, max_fold=max_fold)
+                                      partial(_acc_metric, self), "acc", custom_params, current_fold_nb=current_fold_nb,
+                                      max_fold=max_fold)
+
 
 class AdultNormalized(Adult):
     def __init__(self):
@@ -818,4 +914,3 @@ class AdultNormalized(Adult):
         if self.X is None or self.y is None:
             super().load_dataset()
             self.minmax_normalize()
-
