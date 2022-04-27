@@ -390,6 +390,8 @@ class Dataset:
         for i, c in enumerate(self.X.columns):
             self.X[c] = outputs[i]
 
+        self.X = self.X.astype(np.float32)
+
 
 def _rmse_metric(self, model, best_m):
     yhat = model.predict(self.dtest, output_margin=True)
