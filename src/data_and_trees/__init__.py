@@ -933,3 +933,21 @@ class AdultNormalized(Adult):
         if self.X is None or self.y is None:
             super().load_dataset()
             self.minmax_normalize()
+
+
+class RunningInjuries(Dataset):
+    def __init__(self, df, y):
+        super().__init__(Task.CLASSIFICATION)
+        self.X = df
+        self.y = y
+
+    def load_dataset(self):
+        self.X = self.X.astype(np.float32)
+        self.y = self.y.astype(np.float32)
+
+    def get_xgb_model(self, num_trees, tree_depth, naming_args=None):
+        if naming_args is None:
+            naming_args = {current_fold_nb: 0, max_fold: 0}
+        custom_params = {}
+        return super()._get_xgb_model(num_trees, tree_depth,
+                                      partial(_acc_metric, self), "acc", custom_params, naming_args=naming_args)
