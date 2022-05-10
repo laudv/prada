@@ -16,17 +16,17 @@ from functools import partial
 
 import xgboost as xgb
 
-VERITAS_SUPPORT = False
 try: 
     import veritas
     VERITAS_SUPPORT = True
-finally: pass
+except ModuleNotFoundError as e:
+    VERITAS_SUPPORT = False
 
-GROOT_SUPPORT = False
 try:
     import groot.model
     GROOT_SUPPORT = True
-finally: pass
+except ModuleNotFoundError as e:
+    GROOT_SUPPORT = False
 
 MODEL_DIR = os.environ["DATA_AND_TREES_MODEL_DIR"]
 DATA_DIR = os.environ["DATA_AND_TREES_DATA_DIR"]
@@ -86,7 +86,7 @@ class Dataset:
         return { "n_jobs": self.nthreads }
 
     def groot_params(self):
-        return { "n_jobs": self.nthreads }
+        return { "n_jobs": self.nthreads, "min_samples_leaf": 2 }
 
     def extra_trees_params(self):
         return { "n_jobs": self.nthreads }
@@ -599,6 +599,12 @@ class CovtypeNormalized(Covtype):
             super().load_dataset()
             self.minmax_normalize()
 
+    def xgb_params(self, task):
+        params = Dataset.xgb_params(self, task)
+        #params["subsample"] = 0.25
+        #params["colsample_bytree"] = 0.5
+        return params
+
 class Higgs(Dataset):
     def __init__(self, **kwargs):
         super().__init__(Task.CLASSIFICATION, **kwargs)
@@ -610,6 +616,12 @@ class Higgs(Dataset):
             self.y = pd.read_hdf(higgs_data_path, "y")
             self.minmax_normalize()
             super().load_dataset()
+
+    def xgb_params(self, task):
+        params = Dataset.xgb_params(self, task)
+        params["subsample"] = 0.5
+        params["colsample_bytree"] = 0.5
+        return params
 
 class LargeHiggs(Dataset):
     def __init__(self, **kwargs):
@@ -658,6 +670,22 @@ class MnistKvAll(OneVsAllDataset):
 
     def xgb_params(self, task):
         params = Dataset.xgb_params(self, task)
+        params["subsample"] = 0.5
+        params["colsample_bytree"] = 0.5
+        return params
+
+class EMnist(MulticlassDataset):
+    def __init__(self, **kwargs):
+        super().__init__(num_classes=47, **kwargs)
+
+    def load_dataset(self):
+        if self.X is None or self.y is None:
+            self.X, self.y = self._load_openml("emnist", data_id=41039)
+            super().load_dataset()
+
+    def xgb_params(self, task):
+        params = Dataset.xgb_params(self, task)
+        params["num_class"] = self.num_classes
         params["subsample"] = 0.5
         params["colsample_bytree"] = 0.5
         return params
