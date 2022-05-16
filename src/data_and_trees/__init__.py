@@ -249,12 +249,14 @@ class Dataset:
         # call _get_xgb_model with model comparison for lr optimization
         raise RuntimeError("override in subclass")
 
-    def get_rf_model(self, num_trees, tree_depth, naming_args=None):
+    def get_rf_model(self, num_trees, tree_depth, seed=39482, naming_args=None, force_new=False):
         if naming_args is None:
-            naming_args = {}
+            naming_args = {"seed": seed}
+        else:
+            naming_args["seed"] = seed
         model_name = self.get_model_name("rf", num_trees, tree_depth, naming_args)
         model_path = os.path.join(self.model_dir, model_name)
-        if os.path.isfile(model_path):
+        if not force_new and os.path.isfile(model_path):
             # print(f"loading RF model from file: {model_name}")
             model, meta = joblib.load(model_path)
         else:
@@ -268,7 +270,7 @@ class Dataset:
             params = self.rf_params(custom_params)
 
             if self.task == Task.REGRESSION:
-                model = RandomForestRegressor(**params).fit(self.Xtrain, self.ytrain)
+                model = RandomForestRegressor(random_state=seed, **params).fit(self.Xtrain, self.ytrain)
                 metric = metrics.mean_squared_error(model.predict(self.Xtest), self.ytest)
                 metric = np.sqrt(metric)
                 metric_name = "rmse"
@@ -285,7 +287,8 @@ class Dataset:
                 "task": self.task,
                 "metric": (metric_name, metric),
             }
-            joblib.dump((model, meta), model_path)
+            if not force_new:
+                joblib.dump((model, meta), model_path)
         return model, meta
 
     def get_extra_trees_model(self, num_trees, tree_depth):
