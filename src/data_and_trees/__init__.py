@@ -55,6 +55,7 @@ class Dataset:
     def xgb_params(self, task):
         if task == Task.REGRESSION:
             params = { # defaults
+                "base_score": 0.0,
                 "objective": "reg:squarederror",
                 "eval_metric": "rmse",
                 "tree_method": "hist",
@@ -63,6 +64,7 @@ class Dataset:
             }
         elif task == Task.CLASSIFICATION:
             params = { # defaults
+                #"base_score": 0.5,
                 "objective": "binary:logistic",
                 "eval_metric": "error",
                 "tree_method": "hist",
@@ -71,6 +73,7 @@ class Dataset:
             }
         elif task == Task.MULTI_CLASSIFICATION:
             params = {
+                #"base_score": 0.0,
                 "num_class": 0,
                 "objective": "multi:softmax",
                 "tree_method": "hist",
@@ -962,3 +965,53 @@ class SoccerFRA(Dataset):
         }
 
         self._apply_rev_map("actiongroup0_a1", actiongroup0)
+
+
+class NormalVsAdversarial(Dataset):
+
+    def __init__(self, dataset, nreal, **kwargs):
+        super().__init__(Task.CLASSIFICATION, **kwargs)
+        self.dataset = dataset
+        self.nreal = nreal
+        self.nadv = -1
+
+        self.normals = None
+        self.adversarials = None
+
+    def load_dataset(self):
+        self.dataset.load_dataset()
+        self.X = self.dataset.X
+        self.y = self.dataset.y
+
+    def load_sample(self, fold):
+        self.load_dataset()
+        Xtrain, ytrain, Xtest, ytest = self.dataset.train_and_test_set(fold)
+        Xtrain = Xtrain.to_numpy()
+
+        self.nreal = max(0, min(Xtrain.shape[0]-self.nadv, self.nreal))
+
+        self.normals = Xtrain[:self.nreal, :]
+        self.adversarials_basis = Xtrain[self.nreal:, :]
+
+    def set_adversarials(self, adversarials):
+        self.adversarials = adversarials
+        self.nadv = adversarials.shape[0]
+
+    def train_and_test_set(self, fold):
+        if self.normals is None:
+            raise RuntimeError("use load_sample first")
+        if self.adversarials is None or self.nadv == -1:
+            raise RuntimeError("set adversarials first (based on self.adversarials_basis)")
+
+        _, _, Xtest, _ = self.dataset.train_and_test_set(fold)
+
+        Xtrain = np.vstack((self.normals, self.adversarials))
+        ytrain = np.hstack((np.zeros(self.nreal), np.ones(self.nadv)))
+        ytest = np.zeros(Xtest.shape[0])
+
+        return pd.DataFrame(Xtrain, columns=Xtest.columns), \
+            pd.Series(ytrain), Xtest, pd.Series(ytest)
+
+    def name(self):
+        return f"{self.dataset.name()}vsAdv"
+
