@@ -4,15 +4,18 @@ import enum
 import numpy as np
 import pandas as pd
 
+from functools import partial
+
 import sklearn.metrics as metrics
 from sklearn import preprocessing
 from sklearn.datasets import fetch_openml
-from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 from sklearn.ensemble import ExtraTreesClassifier, ExtraTreesRegressor
-from sklearn.neighbors import KDTree, LocalOutlierFactor
 from sklearn.ensemble import IsolationForest
+from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
+from sklearn.linear_model import LinearRegression, LogisticRegression
+from sklearn.neighbors import KDTree, LocalOutlierFactor
 from sklearn.svm import OneClassSVM
-from functools import partial
+from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor
 
 import xgboost as xgb
 
@@ -92,6 +95,12 @@ class Dataset:
         return { "n_jobs": self.nthreads, "min_samples_leaf": 2 }
 
     def extra_trees_params(self):
+        return { "n_jobs": self.nthreads }
+
+    def decision_tree_params(self):
+        return { }
+
+    def linear_params(self):
         return { "n_jobs": self.nthreads }
 
     def load_dataset(self): # populate X, y
@@ -286,6 +295,79 @@ class Dataset:
             joblib.dump((model, meta), model_path)
         return model, meta
 
+    def get_decision_tree(self, fold, tree_depth):
+        model_name = self.get_model_name(fold, "dt", 1, tree_depth)
+        model_path = os.path.join(self.model_dir, model_name)
+        if os.path.isfile(model_path):
+            print(f"loading DT model from file: {model_name}")
+            model, meta = joblib.load(model_path)
+        else:
+            self.load_dataset()
+            Xtrain, ytrain, Xtest, ytest = self.train_and_test_set(fold)
+
+            params = self.decision_tree_params()
+            params["max_depth"] = tree_depth
+
+            t = time.time()
+            if self.task == Task.REGRESSION:
+                model = DecisionTreeRegressor(**params).fit(Xtrain, ytrain)
+                metric = metrics.mean_squared_error(model.predict(Xtest), ytest)
+                metric = np.sqrt(metric)
+                metric_name = "rmse"
+            else:
+                model = DecisionTreeClassifier(**params).fit(Xtrain, ytrain)
+                metric = metrics.accuracy_score(model.predict(Xtest), ytest)
+                metric_name = "acc"
+            t = time.time() - t
+
+            meta = {
+                "params": params,
+                "num_trees": 1,
+                "tree_depth": tree_depth,
+                "columns": self.X.columns,
+                "task": self.task,
+                "metric": (metric_name, metric),
+                "training_time": t
+            }
+            joblib.dump((model, meta), model_path)
+        return model, meta
+
+    def get_linear_model(self, fold):
+        model_name = self.get_model_name(fold, "linear", 0, 0)
+        model_path = os.path.join(self.model_dir, model_name)
+        if os.path.isfile(model_path):
+            print(f"loading linear model from file: {model_name}")
+            model, meta = joblib.load(model_path)
+        else:
+            self.load_dataset()
+            Xtrain, ytrain, Xtest, ytest = self.train_and_test_set(fold)
+
+            params = self.linear_params()
+
+            t = time.time()
+            if self.task == Task.REGRESSION:
+                model = LinearRegression(**params).fit(Xtrain, ytrain)
+                metric = metrics.mean_squared_error(model.predict(Xtest), ytest)
+                metric = np.sqrt(metric)
+                metric_name = "rmse"
+            else:
+                model = LogisticRegression(**params).fit(Xtrain, ytrain)
+                metric = metrics.accuracy_score(model.predict(Xtest), ytest)
+                metric_name = "acc"
+            t = time.time() - t
+
+            meta = {
+                "params": params,
+                "num_trees": 0,
+                "tree_depth": 0,
+                "columns": self.X.columns,
+                "task": self.task,
+                "metric": (metric_name, metric),
+                "training_time": t
+            }
+            joblib.dump((model, meta), model_path)
+        return model, meta
+
     def get_groot_model(self, fold, num_trees, tree_depth, epsilon):
         if not GROOT_SUPPORT:
             raise RuntimeError("GROOT not installed")
@@ -406,7 +488,7 @@ class Dataset:
             self.load_dataset()
             Xtrain, ytrain, Xtest, ytest = self.train_and_test_set(fold)
             t = time.time()
-            lof = LocalOutlierFactor()
+            lof = LocalOutlierFactor(n_neighbors=10)
             lof.fit(Xtrain)
             t = time.time() - t
             print(f"trained LocalOutlierFactor in {t:.2f}s");
@@ -554,6 +636,29 @@ class CalhouseClf(Dataset):
             self.y = self.y > self.threshold
             super().load_dataset()
 
+class CPUSmall(Dataset):
+    def __init__(self, **kwargs):
+        super().__init__(Task.REGRESSION, **kwargs)
+    
+    def load_dataset(self):
+        if self.X is None or self.y is None:
+            self.X, self.y = self._load_openml("cpusmall", data_id=227)
+            super().load_dataset()
+
+class Diamonds(Dataset):
+    def __init__(self, **kwargs):
+        super().__init__(Task.REGRESSION, **kwargs)
+    
+    def load_dataset(self):
+        if self.X is None or self.y is None:
+            self.X, self.y = self._load_openml("diamonds", data_id=42225)
+            super().load_dataset()
+
+    def _transform_X_y(self, X, y):
+        X = pd.get_dummies(X, columns=["cut", "color", "clarity"], drop_first=False)
+        y = np.log(y)
+        return X, y
+
 class Allstate(Dataset):
     dataset_name = "allstate.h5"
 
@@ -572,7 +677,7 @@ class AllstateClf(Dataset):
     dataset_name = "allstate.h5"
 
     def __init__(self, **kwargs):
-        super().__init__(Task.REGRESSION, **kwargs)
+        super().__init__(Task.CLASSIFICATION, **kwargs)
 
     def load_dataset(self):
         if self.X is None or self.y is None:
@@ -969,11 +1074,12 @@ class SoccerFRA(Dataset):
 
 class NormalVsAdversarial(Dataset):
 
-    def __init__(self, dataset, nreal, **kwargs):
+    def __init__(self, dataset, nreal, min_nadv, **kwargs):
         super().__init__(Task.CLASSIFICATION, **kwargs)
         self.dataset = dataset
         self.nreal = nreal
         self.nadv = -1
+        self.min_nadv = min_nadv
 
         self.normals = None
         self.adversarials = None
@@ -988,7 +1094,11 @@ class NormalVsAdversarial(Dataset):
         Xtrain, ytrain, Xtest, ytest = self.dataset.train_and_test_set(fold)
         Xtrain = Xtrain.to_numpy()
 
-        self.nreal = max(0, min(Xtrain.shape[0]-self.nadv, self.nreal))
+        if self.min_nadv+self.nreal > Xtrain.shape[0]:
+            print(f"WARNING: not enough training set examples for "
+                  f"{self.dataset.name()} NormalVsAdversarial")
+            print("Changing nreal to",  Xtrain.shape[0] - self.min_nadv)
+            self.nreal = Xtrain.shape[0] - self.min_nadv
 
         self.normals = Xtrain[:self.nreal, :]
         self.adversarials_basis = Xtrain[self.nreal:, :]
@@ -1013,5 +1123,4 @@ class NormalVsAdversarial(Dataset):
             pd.Series(ytrain), Xtest, pd.Series(ytest)
 
     def name(self):
-        return f"{self.dataset.name()}vsAdv"
-
+        return f"{self.dataset.name()}vsAdv{self.nreal}"
