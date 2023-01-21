@@ -89,7 +89,11 @@ class Dataset:
         return params
 
     def rf_params(self):
-        return { "n_jobs": self.nthreads }
+        return {
+            "n_jobs": self.nthreads,
+            "max_depth": None,
+            "max_leaf_nodes": 254,
+        }
 
     def groot_params(self):
         return { "n_jobs": self.nthreads, "min_samples_leaf": 2 }
@@ -257,7 +261,7 @@ class Dataset:
 
         return model, meta
 
-    def get_rf_model(self, fold, num_trees, tree_depth):
+    def get_rf_model(self, fold, num_trees, tree_depth=None):
         model_name = self.get_model_name(fold, "rf", num_trees, tree_depth)
         model_path = os.path.join(self.model_dir, model_name)
         if os.path.isfile(model_path):
