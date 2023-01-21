@@ -999,6 +999,25 @@ class Spambase(Dataset):
             self.minmax_normalize()
             super().load_dataset()
 
+class Electricity(Dataset):
+    def __init__(self, **kwargs):
+        super().__init__(Task.CLASSIFICATION, **kwargs)
+
+    def _transform_X_y(self, X, y):
+        y = (y == "UP") # y values are in ['UP', 'DOWN'] -> transform to binary
+        return X, y
+
+    def xgb_params(self, task):
+        params = Dataset.xgb_params(self, task)
+        params["subsample"] = 0.6
+        return params
+
+    def load_dataset(self):
+        if self.X is None or self.y is None:
+            self.X, self.y = self._load_openml("electricity", data_id=151)
+            self.minmax_normalize()
+            super().load_dataset()
+
 class SoccerFRA(Dataset):
     dataset_name = "spadl-whoscored-FRA-xg.h5"
     def __init__(self, **kwargs):
