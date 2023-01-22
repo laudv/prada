@@ -833,8 +833,8 @@ class FashionMnistBinClass(MultiBinClassDataset):
 
     def xgb_params(self, task):
         params = Dataset.xgb_params(self, task)
-        params["subsample"] = 0.5
-        params["colsample_bytree"] = 0.8
+        params["subsample"] = 0.4
+        params["colsample_bytree"] = 0.5
         return params
 
 class FashionMnistKvAll(OneVsAllDataset):
