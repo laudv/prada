@@ -41,7 +41,7 @@ class Task(enum.Enum):
     MULTI_CLASSIFICATION = 3
 
 class Dataset:
-    def __init__(self, task, nfolds=10, seed=18):
+    def __init__(self, task, nfolds=10, seed=10):
         self.task = task
         self.model_dir = MODEL_DIR
         self.data_dir = DATA_DIR
@@ -717,6 +717,22 @@ class CovtypeNormalized(Covtype):
         #params["colsample_bytree"] = 0.5
         return params
 
+    def rf_params(self):
+        params = Dataset.rf_params(self)
+        #Lori - additional params from GROOT paper
+        params["min_samples_split"]=10
+        params["min_samples_leaf"]=5
+
+        return params
+
+    def groot_params(self):
+        params = Dataset.groot_params(self)
+        #Lori - additional params from GROOT paper
+        params["min_samples_split"]=10
+        params["min_samples_leaf"]=5
+
+        return params
+
 class Higgs(Dataset):
     def __init__(self, **kwargs):
         super().__init__(Task.CLASSIFICATION, **kwargs)
@@ -801,6 +817,19 @@ class EMnist(MulticlassDataset):
         params["subsample"] = 0.5
         params["colsample_bytree"] = 0.5
         return params
+
+class MnistLt5(Dataset):
+    def __init__(self, **kwargs):
+        super().__init__(Task.CLASSIFICATION, **kwargs)
+
+    def load_dataset(self):
+        if self.X is None or self.y is None:
+            self.X, self.y = self._load_openml("mnist", data_id=554)
+            self.y = self.y<5
+            super().load_dataset()
+
+    def name(self):
+        return f"{super().name()}"
 
 # 0  T-shirt/top
 # 1  Trouser
@@ -1147,3 +1176,19 @@ class NormalVsAdversarial(Dataset):
 
     def name(self):
         return f"{self.dataset.name()}vsAdv{self.nreal}"
+        
+
+
+class Banknote(Dataset):
+    def __init__(self, **kwargs):
+        super().__init__(Task.CLASSIFICATION, **kwargs)
+
+    def _transform_X_y(self, X, y):
+        y = (y == "2") # y values are in ['1', '2'] -> transform to binary
+        return X, y
+
+    def load_dataset(self):
+        if self.X is None or self.y is None:
+            self.X, self.y = self._load_openml("banknote-authentication", data_id=1462)
+            self.minmax_normalize()
+            super().load_dataset()
