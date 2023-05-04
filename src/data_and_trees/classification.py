@@ -197,6 +197,19 @@ class FashionMnistKvAll(OneVsAllDataset):
         params["colsample_bytree"] = 0.5
         return params
 
+class FashionMnistLt5(Dataset):
+    def __init__(self, **kwargs):
+        super().__init__(Task.CLASSIFICATION, **kwargs)
+
+    def load_dataset(self):
+        if self.X is None or self.y is None:
+            self.X, self.y = self._load_openml("fashion_mnist", data_id=40996)
+            self.y = self.y<5
+            super().load_dataset()
+
+    def name(self):
+        return f"{super().name()}"
+
 class Ijcnn1(Dataset):
     dataset_name = "ijcnn1.h5"
 
@@ -388,7 +401,7 @@ class SensorlessDriveDiagnosis(MulticlassDataset):
     dataset_name = "Sensorless_drive_diagnosis.txt.gz"
 
     def __init__(self, **kwargs):
-        super().__init__(num_classes=7, **kwargs)
+        super().__init__(num_classes=11, **kwargs)
 
     def load_dataset(self):
         if self.X is None or self.y is None:
@@ -410,3 +423,28 @@ class SensorlessDriveDiagnosis(MulticlassDataset):
         #params["subsample"] = 0.5
         #params["colsample_bytree"] = 0.5
         return params
+
+class SensorlessDriveDiagnosisLt6(Dataset):
+    dataset_name = "Sensorless_drive_diagnosis.txt.gz"
+
+    def __init__(self, **kwargs):
+        super().__init__(Task.CLASSIFICATION, **kwargs)
+
+    def load_dataset(self):
+        if self.X is None or self.y is None:
+            self.X, self.y = self._load_csv_gz(
+                    SensorlessDriveDiagnosis.dataset_name,
+                    read_csv_kwargs={"sep": " ", "header": None})
+            self.y = self.y<6
+            self.minmax_normalize()
+            super().load_dataset()
+
+    def _transform_X_y(self, data, _target_still_in_data):
+        X = data.iloc[:, 0:-1]
+        X.columns = [f"f{i}" for i in range(X.shape[1])]
+        y = data.iloc[:, -1]
+
+        return X, y
+
+    def name(self):
+        return f"{super().name()}"
