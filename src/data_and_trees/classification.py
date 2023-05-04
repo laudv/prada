@@ -342,3 +342,71 @@ class Banknote(Dataset):
             self.X, self.y = self._load_openml("banknote-authentication", data_id=1462)
             self.minmax_normalize()
             super().load_dataset()
+
+class DryBean(MulticlassDataset):
+    dataset_name = "Dry_Bean_Dataset.arff"
+
+    def __init__(self, **kwargs):
+        super().__init__(num_classes=7, **kwargs)
+
+    def load_dataset(self):
+        if self.X is None or self.y is None:
+            self.X, self.y = self._load_arff(DryBean.dataset_name)
+            self.minmax_normalize()
+            super().load_dataset()
+
+    def _transform_X_y(self, data, _target_still_in_data):
+        num_feat = len(data[0].dtype) - 1
+        num_ex = len(data[0])
+
+        X = np.zeros((num_ex, num_feat), dtype=np.float32)
+
+        print(data[0].shape)
+        for k in range(num_feat):
+            X[:, k] = [v[k] for v in data[0]]
+        y = [v[num_feat] for v in data[0]]
+
+        from sklearn import preprocessing
+        le = preprocessing.LabelEncoder()
+        y = le.fit_transform(y)
+
+        columns = [x for x in data[1]][0:num_feat]
+        X = pd.DataFrame(X, columns=columns)
+        y = pd.Series(y)
+
+        return X, y
+
+    def xgb_params(self, task):
+        params = Dataset.xgb_params(self, task)
+        params["num_class"] = self.num_classes
+        #params["subsample"] = 0.5
+        #params["colsample_bytree"] = 0.5
+        return params
+
+# https://archive.ics.uci.edu/ml/datasets/dataset+for+sensorless+drive+diagnosis
+class SensorlessDriveDiagnosis(MulticlassDataset):
+    dataset_name = "Sensorless_drive_diagnosis.txt.gz"
+
+    def __init__(self, **kwargs):
+        super().__init__(num_classes=7, **kwargs)
+
+    def load_dataset(self):
+        if self.X is None or self.y is None:
+            self.X, self.y = self._load_csv_gz(
+                    SensorlessDriveDiagnosis.dataset_name,
+                    read_csv_kwargs={"sep": " ", "header": None})
+            self.minmax_normalize()
+            super().load_dataset()
+
+    def _transform_X_y(self, data, _target_still_in_data):
+        X = data.iloc[:, 0:-1]
+        y = data.iloc[:, -1]
+
+        return X, y
+
+    def xgb_params(self, task):
+        params = Dataset.xgb_params(self, task)
+        params["num_class"] = self.num_classes
+        #params["subsample"] = 0.5
+        #params["colsample_bytree"] = 0.5
+        return params

@@ -1,9 +1,12 @@
 import os
+import gzip
 import time
 import joblib
 import enum
 import numpy as np
 import pandas as pd
+
+from scipy.io.arff import loadarff
 
 import sklearn.metrics as metrics
 from sklearn import preprocessing
@@ -158,26 +161,62 @@ class Dataset:
                 return veritas.addtree_from_sklearn_ensemble(model)
 
     def _load_openml(self, name, data_id, force=False):
-        if not os.path.exists(f"{self.data_dir}/{name}.h5") or force:
+        h5file = os.path.join(self.data_dir, f"{name}.h5")
+        if not os.path.exists(h5file) or force:
             print(f"loading {name} with fetch_openml")
             X, y = fetch_openml(data_id=data_id, return_X_y=True, as_frame=True)
             X, y = self._transform_X_y(X, y)
             X = X.astype(np.float32)
             y = y.astype(np.float32)
-            X.to_hdf(f"{self.data_dir}/{name}.h5", key="X", complevel=9)
-            y.to_hdf(f"{self.data_dir}/{name}.h5", key="y", complevel=9)
+            X.to_hdf(h5file, key="X", complevel=9)
+            y.to_hdf(h5file, key="y", complevel=9)
 
         print(f"loading {name} h5 file")
-        X = pd.read_hdf(f"{self.data_dir}/{name}.h5", key="X")
-        y = pd.read_hdf(f"{self.data_dir}/{name}.h5", key="y")
+        X = pd.read_hdf(h5file, key="X")
+        y = pd.read_hdf(h5file, key="y")
+
+        return X, y
+
+    def _load_arff(self, name, force=False):
+        h5file = os.path.join(self.data_dir, f"{name}.h5")
+        if not os.path.exists(h5file) or force:
+            print(f"loading {name} from arff file")
+            data = loadarff(os.path.join(self.data_dir, name))
+            X, y = self._transform_X_y(data, None)
+            X = X.astype(np.float32)
+            y = y.astype(np.float32)
+            X.to_hdf(h5file, key="X", complevel=9)
+            y.to_hdf(h5file, key="y", complevel=9)
+
+        print(f"loading {name} h5 file")
+        X = pd.read_hdf(h5file, key="X")
+        y = pd.read_hdf(h5file, key="y")
+
+        return X, y
+
+    def _load_csv_gz(self, name, force=False, read_csv_kwargs={}):
+        h5file = os.path.join(self.data_dir, f"{name}.h5")
+        if not os.path.exists(h5file) or force:
+            print(f"loading {name} from gzipped csv file")
+            with gzip.open(os.path.join(self.data_dir, name), "rb") as f:
+                data = pd.read_csv(f, **read_csv_kwargs)
+            X, y = self._transform_X_y(data, None)
+            X = X.astype(np.float32)
+            y = y.astype(np.float32)
+            X.to_hdf(h5file, key="X", complevel=9)
+            y.to_hdf(h5file, key="y", complevel=9)
+
+        print(f"loading {name} h5 file")
+        X = pd.read_hdf(h5file, key="X")
+        y = pd.read_hdf(h5file, key="y")
 
         return X, y
 
     def _transform_X_y(self, X, y): # override if necessary
         return X, y
 
-    ## model_cmp: (model, best_metric) -> `best_metric` if not better, new metric value if better
-    #  best metric can be None
+    ## model_cmp: (model, best_metric) -> `best_metric` if not better, new
+    ## metric value if better best metric can be None
     def get_xgb_model(self, fold, learning_rate, num_trees, tree_depth):
         lr = learning_rate
         model_name = self.get_model_name(fold, "xgb", num_trees, tree_depth, lr=f"{lr*100:.0f}")
@@ -203,11 +242,11 @@ class Dataset:
             t = time.time() - t
 
             if self.task == Task.REGRESSION:
-                metric = metrics.mean_squared_error(model.predict(dtest), ytest)
+                metric = metrics.mean_squared_error(ytest, model.predict(dtest))
                 metric = np.sqrt(metric)
                 metric_name = "rmse"
             else:
-                metric = metrics.accuracy_score(model.predict(dtest)>0.5, ytest)
+                metric = metrics.accuracy_score(ytest, model.predict(dtest)>0.5)
                 metric_name = "acc"
 
             params["num_trees"] = num_trees
