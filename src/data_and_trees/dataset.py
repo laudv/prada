@@ -112,8 +112,8 @@ class Dataset:
     def load_dataset(self): # populate X, y
         if self.X is None or self.y is None:
             raise RuntimeError("override this and call after loading X and y")
-        self.X = self.X.astype(np.float32)
-        self.y = self.y.astype(np.float32)
+        self.X = self.X.astype(veritas.FloatT)
+        self.y = self.y.astype(veritas.FloatT)
         N = self.X.shape[0]
 
         rand = np.random.RandomState(self.seed)
@@ -166,8 +166,8 @@ class Dataset:
             print(f"loading {name} with fetch_openml")
             X, y = fetch_openml(data_id=data_id, return_X_y=True, as_frame=True)
             X, y = self._transform_X_y(X, y)
-            X = X.astype(np.float32)
-            y = y.astype(np.float32)
+            X = X.astype(veritas.FloatT)
+            y = y.astype(veritas.FloatT)
             X.to_hdf(h5file, key="X", complevel=9)
             y.to_hdf(h5file, key="y", complevel=9)
 
@@ -183,8 +183,8 @@ class Dataset:
             print(f"loading {name} from arff file")
             data = loadarff(os.path.join(self.data_dir, name))
             X, y = self._transform_X_y(data, None)
-            X = X.astype(np.float32)
-            y = y.astype(np.float32)
+            X = X.astype(veritas.FloatT)
+            y = y.astype(veritas.FloatT)
             X.to_hdf(h5file, key="X", complevel=9)
             y.to_hdf(h5file, key="y", complevel=9)
 
@@ -201,8 +201,8 @@ class Dataset:
             with gzip.open(os.path.join(self.data_dir, name), "rb") as f:
                 data = pd.read_csv(f, **read_csv_kwargs)
             X, y = self._transform_X_y(data, None)
-            X = X.astype(np.float32)
-            y = y.astype(np.float32)
+            X = X.astype(veritas.FloatT)
+            y = y.astype(veritas.FloatT)
             X.to_hdf(h5file, key="X", complevel=9)
             y.to_hdf(h5file, key="y", complevel=9)
 

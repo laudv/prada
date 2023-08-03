@@ -356,6 +356,36 @@ class Banknote(Dataset):
             self.minmax_normalize()
             super().load_dataset()
 
+class Img(Dataset):
+    dataset_name = "img.h5"
+
+    def __init__(self, **kwargs):
+        super().__init__(Task.CLASSIFICATION, **kwargs)
+
+    def load_dataset(self):
+        if self.X is None or self.y is None:
+            data_path = os.path.join(self.data_dir, Img.dataset_name)
+            self.X = pd.read_hdf(data_path, "X")
+            self.X.columns = [f"a{i}" for i in range(self.X.shape[1])]
+            self.yreal = pd.read_hdf(data_path, "y")
+            self.threshold = np.median(self.yreal)
+            self.y = self.yreal >= self.threshold
+            self.minmax_normalize()
+            super().load_dataset()
+
+    def read_from_img(self, fname):
+        import imageio
+        img = imageio.imread(fname)
+        X = np.array([[x, y] for x in range(100) for y in range(100)])
+        y = np.array([img[x, y] for x, y in X])
+
+        df = pd.DataFrame(X, columns=["a0", "a1"])
+        dfy = pd.Series(y)
+
+        data_path = os.path.join(self.data_dir, Img.dataset_name)
+        df.to_hdf(data_path, key='X', mode='w') 
+        dfy.to_hdf(data_path, key='y', mode='a') 
+
 class DryBean(MulticlassDataset):
     dataset_name = "Dry_Bean_Dataset.arff"
 
