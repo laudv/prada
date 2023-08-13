@@ -356,35 +356,34 @@ class Banknote(Dataset):
             self.minmax_normalize()
             super().load_dataset()
 
-class Img(Dataset):
-    dataset_name = "img.h5"
-
+class KddCup99(Dataset):
     def __init__(self, **kwargs):
         super().__init__(Task.CLASSIFICATION, **kwargs)
 
+    def _transform_X_y(self, X, y):
+        X["service_ecr_i"] = (X.service == "ecr_i")
+        X["service_priv"] = (X.service == "private")
+        X["service_http"] = (X.service == "http")
+        X["service_smtp"] = (X.service == "smtp")
+        X["flag_sf"] = (X.flag == "SF")
+        X["flag_s0"] = (X.flag == "S0")
+        X["flag_rej"] = (X.flag == "rej")
+        X = pd.get_dummies(X, columns=["protocol_type"], drop_first=True)
+        X.drop(inplace=True, columns=["service", "flag", "land", "urgent"])
+        y = (y=="normal")
+        return X, y
+
     def load_dataset(self):
         if self.X is None or self.y is None:
-            data_path = os.path.join(self.data_dir, Img.dataset_name)
-            self.X = pd.read_hdf(data_path, "X")
-            self.X.columns = [f"a{i}" for i in range(self.X.shape[1])]
-            self.yreal = pd.read_hdf(data_path, "y")
-            self.threshold = np.median(self.yreal)
-            self.y = self.yreal >= self.threshold
+            self.X, self.y = self._load_openml("kkdcup99", data_id=1113)
             self.minmax_normalize()
             super().load_dataset()
 
-    def read_from_img(self, fname):
-        import imageio
-        img = imageio.imread(fname)
-        X = np.array([[x, y] for x in range(100) for y in range(100)])
-        y = np.array([img[x, y] for x, y in X])
-
-        df = pd.DataFrame(X, columns=["a0", "a1"])
-        dfy = pd.Series(y)
-
-        data_path = os.path.join(self.data_dir, Img.dataset_name)
-        df.to_hdf(data_path, key='X', mode='w') 
-        dfy.to_hdf(data_path, key='y', mode='a') 
+    def xgb_params(self, task):
+        params = Dataset.xgb_params(self, task)
+        params["subsample"] = 0.5
+        params["colsample_bytree"] = 0.8
+        return params
 
 class DryBean(MulticlassDataset):
     dataset_name = "Dry_Bean_Dataset.arff"
@@ -395,8 +394,8 @@ class DryBean(MulticlassDataset):
     def load_dataset(self):
         if self.X is None or self.y is None:
             self.X, self.y = self._load_arff(DryBean.dataset_name)
-            self.minmax_normalize()
             super().load_dataset()
+            self.minmax_normalize()
 
     def _transform_X_y(self, data, _target_still_in_data):
         num_feat = len(data[0].dtype) - 1
@@ -438,12 +437,16 @@ class SensorlessDriveDiagnosis(MulticlassDataset):
             self.X, self.y = self._load_csv_gz(
                     SensorlessDriveDiagnosis.dataset_name,
                     read_csv_kwargs={"sep": " ", "header": None})
-            self.minmax_normalize()
             super().load_dataset()
+            self.minmax_normalize()
 
     def _transform_X_y(self, data, _target_still_in_data):
         X = data.iloc[:, 0:-1]
+        X.columns = [f"f{i}" for i in range(X.shape[1])]
         y = data.iloc[:, -1]
+
+        vmap = {v: i for i, v in enumerate(sorted(y.unique()))}
+        y = pd.Series([vmap[x] for x in y], name="class")
 
         return X, y
 
@@ -466,8 +469,8 @@ class SensorlessDriveDiagnosisLt6(Dataset):
                     SensorlessDriveDiagnosis.dataset_name,
                     read_csv_kwargs={"sep": " ", "header": None})
             self.y = self.y<6
-            self.minmax_normalize()
             super().load_dataset()
+            self.minmax_normalize()
 
     def _transform_X_y(self, data, _target_still_in_data):
         X = data.iloc[:, 0:-1]
@@ -478,3 +481,115 @@ class SensorlessDriveDiagnosisLt6(Dataset):
 
     def name(self):
         return f"{super().name()}"
+
+# https://archive.ics.uci.edu/dataset/186/wine+quality
+class WineQuality(MulticlassDataset):
+    dataset_name = "WineQuality.csv.gz"
+
+    def __init__(self, **kwargs):
+        super().__init__(num_classes=7, **kwargs)
+
+    def load_dataset(self):
+        if self.X is None or self.y is None:
+            self.X, self.y = self._load_csv_gz(
+                    WineQuality.dataset_name)
+            super().load_dataset()
+            self.minmax_normalize()
+
+    def _transform_X_y(self, data, _target_still_in_data):
+        quality = data["quality"]
+        qvalmap = {v: i for i, v in enumerate(sorted(quality.unique()))}
+        y = pd.Series([qvalmap[x] for x in quality], name="quality")
+        is_red = data["Type"] == "Red Wine"
+        data.drop(inplace=True, columns=["Unnamed: 0", "Type", "quality"])
+        data["IsRed"] = is_red
+        X = data.astype(float)
+
+        return X, y
+
+    def xgb_params(self, task):
+        params = Dataset.xgb_params(self, task)
+        params["num_class"] = self.num_classes
+        #params["subsample"] = 0.5
+        #params["colsample_bytree"] = 0.5
+        return params
+
+# https://archive.ics.uci.edu/dataset/59/letter+recognition
+class LetterRecognition(MulticlassDataset):
+    dataset_name = "letter-recognition.data.gz"
+
+    def __init__(self, **kwargs):
+        super().__init__(num_classes=26, **kwargs)
+
+    def load_dataset(self):
+        if self.X is None or self.y is None:
+            self.X, self.y = self._load_csv_gz(
+                    LetterRecognition.dataset_name,
+                    read_csv_kwargs={"header": None})
+            super().load_dataset()
+            self.minmax_normalize()
+
+    def _transform_X_y(self, data, _target_still_in_data):
+        letters = data.iloc[:, 0]
+        lmap = {v: i for i, v in enumerate(sorted(letters.unique()))}
+        y = pd.Series([lmap[x] for x in letters], name="letter")
+        data.drop(inplace=True, columns=[0])
+        X = data.astype(float)
+        X.columns = [f"f{i}" for i in range(X.shape[1])]
+        return X, y
+
+    def xgb_params(self, task):
+        params = Dataset.xgb_params(self, task)
+        params["num_class"] = self.num_classes
+        #params["subsample"] = 0.5
+        #params["colsample_bytree"] = 0.5
+        return params
+
+# https://archive.ics.uci.edu/dataset/81/pen+based+recognition+of+handwritten+digits
+class PenDigits(MulticlassDataset):
+    dataset_name = "pendigits.csv.gz"
+
+    def __init__(self, **kwargs):
+        super().__init__(num_classes=10, **kwargs)
+
+    def load_dataset(self):
+        if self.X is None or self.y is None:
+            self.X, self.y = self._load_csv_gz(
+                    PenDigits.dataset_name,
+                    read_csv_kwargs={"header": None})
+            super().load_dataset()
+            self.minmax_normalize()
+
+    def _transform_X_y(self, data, _target_still_in_data):
+        data.columns = [f"f{i}" for i in range(data.shape[1])]
+        digits = data.iloc[:, -1]
+        dmap = {v: i for i, v in enumerate(sorted(digits.unique()))}
+        y = pd.Series([dmap[x] for x in digits], name="digits")
+        data.drop(inplace=True, columns=[digits.name])
+        X = data.astype(float)
+        return X, y
+
+    def xgb_params(self, task):
+        params = Dataset.xgb_params(self, task)
+        params["num_class"] = self.num_classes
+        #params["subsample"] = 0.5
+        #params["colsample_bytree"] = 0.5
+        return params
+
+class ImgClf(MulticlassDataset):
+    def __init__(self, num_classes, **kwargs):
+        super().__init__(num_classes=num_classes, **kwargs)
+
+        self.buckets = np.linspace(0, 1, num_classes+1)[1:-1]
+
+        from .regression import Img
+        self.img = Img()
+
+    def load_dataset(self):
+        self.img.load_dataset()
+        self.X, self.yreg = self.img.X, self.img.y
+        self.thresholds = np.quantile(self.yreg, self.buckets)
+        y = np.digitize(self.yreg, self.thresholds)
+        self.y = pd.Series(y, name="intensity")
+        super().load_dataset()
+

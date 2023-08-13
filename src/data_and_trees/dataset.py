@@ -153,12 +153,7 @@ class Dataset:
                 isinstance(model, groot.model.GrootRandomForestClassifier):
             return veritas.addtree_from_groot_ensemble(model)
         else:
-            if self.task == Task.MULTI_CLASSIFICATION:
-                nclasses = self.num_classes
-                return veritas.addtrees_from_multiclass_sklearn_ensemble(model,
-                        nclasses)
-            else:
-                return veritas.addtree_from_sklearn_ensemble(model)
+            return veritas.addtree_from_sklearn_ensemble(model)
 
     def _load_openml(self, name, data_id, force=False):
         h5file = os.path.join(self.data_dir, f"{name}.h5")

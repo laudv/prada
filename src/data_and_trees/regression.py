@@ -71,34 +71,35 @@ class Allstate(Dataset):
             self.y = data.loss
             super().load_dataset()
 
-class KddCup99(Dataset):
-    def __init__(self, **kwargs):
-        super().__init__(Task.CLASSIFICATION, **kwargs)
+class Img(Dataset):
+    dataset_name = "img.h5"
 
-    def _transform_X_y(self, X, y):
-        X["service_ecr_i"] = (X.service == "ecr_i")
-        X["service_priv"] = (X.service == "private")
-        X["service_http"] = (X.service == "http")
-        X["service_smtp"] = (X.service == "smtp")
-        X["flag_sf"] = (X.flag == "SF")
-        X["flag_s0"] = (X.flag == "S0")
-        X["flag_rej"] = (X.flag == "rej")
-        X = pd.get_dummies(X, columns=["protocol_type"], drop_first=True)
-        X.drop(inplace=True, columns=["service", "flag", "land", "urgent"])
-        y = (y=="normal")
-        return X, y
+    def __init__(self, **kwargs):
+        super().__init__(Task.REGRESSION, **kwargs)
 
     def load_dataset(self):
         if self.X is None or self.y is None:
-            self.X, self.y = self._load_openml("kkdcup99", data_id=1113)
+            data_path = os.path.join(self.data_dir, Img.dataset_name)
+            self.X = pd.read_hdf(data_path, "X")
+            self.X.columns = [f"a{i}" for i in range(self.X.shape[1])]
+            self.y = pd.read_hdf(data_path, "y")
+            #self.threshold = np.median(self.yreal)
+            #self.y = self.yreal >= self.threshold
             self.minmax_normalize()
             super().load_dataset()
 
-    def xgb_params(self, task):
-        params = Dataset.xgb_params(self, task)
-        params["subsample"] = 0.5
-        params["colsample_bytree"] = 0.8
-        return params
+    def read_from_img(self, fname):
+        import imageio
+        img = imageio.imread(fname)
+        X = np.array([[x, y] for x in range(100) for y in range(100)])
+        y = np.array([img[x, y] for x, y in X])
+
+        df = pd.DataFrame(X, columns=["a0", "a1"])
+        dfy = pd.Series(y)
+
+        data_path = os.path.join(self.data_dir, Img.dataset_name)
+        df.to_hdf(data_path, key='X', mode='w') 
+        dfy.to_hdf(data_path, key='y', mode='a') 
 
 class AmesHousing(Dataset):
     def __init__(self, **kwargs):
