@@ -89,6 +89,10 @@ class Dataset:
                                (TestFold,) + mro, {})
         test_fold = test_fold_type(fold)
 
+        for f in self.task_fields():
+            setattr(train_fold, f, getattr(self, f))
+            setattr(test_fold, f, getattr(self, f))
+
         return train_fold, test_fold
 
     def astype(self, dtype):
@@ -202,19 +206,10 @@ class Dataset:
         self.X = df
 
 
-    def hyperparam(self, model_class, **kwargs):
+    def paramgrid(self, **kwargs):
         import itertools
 
         assert self.are_X_y_set()
-
-        if isinstance(model_class, str):
-            model_class = self.get_model_classes()[model_class]
-
-        if not isinstance(self, TrainFold):
-            if isinstance(self, TestFold):
-                print("Warning: `hyperparam` on test fold?")
-            else:
-                print("Warning: `hyperparam` on the full dataset?")
 
         param_lists = {k: (v if isinstance(v, list) else [v])
                        for k, v in kwargs.items()}
@@ -222,21 +217,25 @@ class Dataset:
 
         for instance in itertools.product(*param_lists.values()):
             params = dict(zip(param_names, instance))
+            yield params
 
-            t = time.time()
-            clf = model_class(**params)
-            clf.fit(self.X, self.y)
-            t = time.time() - t
+    def train(self, model_class, params):
+        if not isinstance(self, TrainFold):
+            raise RuntimeError("train on a TrainFold (use `Dataset.fold()`)")
 
-            mtrain = self.metric(self.y, clf.predict(self.X))
+        train_time = time.time()
+        clf = model_class(**params)
+        clf.fit(self.X, self.y)
+        train_time = time.time() - train_time
 
-            results = {
-                "clf": clf,
-                "mtrain": mtrain,
-                "train_time": t
-            }
+        mtrain = self.metric(self._fold.ytrain, clf.predict(self._fold.Xtrain))
+        mtest =  self.metric(self._fold.ytest,  clf.predict(self._fold.Xtest))
 
-            yield (params, results)
+        return clf, mtrain, mtest, train_time
+
+    def hyperparam(self, model_class, **kwargs):
+        for params in self.paramgrid(**kwargs):
+            yield self.train(model_class, params)
             
 class Fold:
     def __init__(self, dataset, fold_index, nfolds=None):
@@ -345,27 +344,23 @@ class RegressionMixin:
     def metric_name(self):
         return "rmse"
 
-    def get_model_classes(self):
-        classes = {}
-        try:
+    def get_model_class(self, model_type):
+        if model_type == "xgb":
             import xgboost as xgb
-            classes["xgb"] = xgb.XGBRegressor
-        except ModuleNotFoundError:
-            pass
+            return xgb.XGBRegressor
 
-        try:
+        if model_type == "rf":
             import sklearn.ensemble
-            classes["rf"] = sklearn.ensemble.RandomForestRegressor
-        except ModuleNotFoundError:
-            pass
+            return sklearn.ensemble.RandomForestRegressor
 
-        try:
+        if model_type == "lgb":
             import lightgbm as lgb
-            classes["lgb"] = lgb.LGBMRegressor
-        except ModuleNotFoundError:
-            pass
+            return lgb.LGBMRegressor
 
-        return classes
+        raise ValueError(f"Unknown model_type {model_type}")
+
+    def task_fields(self):
+        return []
 
 class BinaryMixin:
 
@@ -376,29 +371,26 @@ class BinaryMixin:
     def metric_name(self):
         return "accuracy"
 
-    def get_model_classes(self):
-        classes = {}
-        try:
+    def get_model_class(self, model_type):
+        if model_type == "xgb":
             import xgboost as xgb
-            classes["xgb"] = xgb.XGBClassifier
-        except ModuleNotFoundError:
-            pass
+            return xgb.XGBClassifier
 
-        try:
+        if model_type == "rf":
             import sklearn.ensemble
-            classes["rf"] = sklearn.ensemble.RandomForestClassifier
-        except ModuleNotFoundError:
-            pass
+            return sklearn.ensemble.RandomForestClassifier
 
-        try:
+        if model_type == "lgb":
             import lightgbm as lgb
-            classes["lgb"] = lgb.LGBMClassifier
-        except ModuleNotFoundError:
-            pass
+            return lgb.LGBMClassifier
 
-        return classes
+        raise ValueError(f"Unknown model_type {model_type}")
+
+    def task_fields(self):
+        return []
 
 class MulticlassMixin:
+
     def one_vs_other(self, class1, class2):
         assert self.is_multiclass()
 
@@ -486,25 +478,21 @@ class MulticlassMixin:
     def metric_name(self):
         return "accuracy"
 
-    def get_model_classes(self):
-        classes = {}
-        try:
+    def get_model_class(self, model_type):
+        if model_type == "xgb":
             import xgboost as xgb
-            classes["xgb"] = xgb.XGBClassifier
-        except ModuleNotFoundError:
-            pass
+            return xgb.XGBClassifier
 
-        try:
+        if model_type == "rf":
             import sklearn.ensemble
-            classes["rf"] = sklearn.ensemble.RandomForestClassifier
-        except ModuleNotFoundError:
-            pass
+            return sklearn.ensemble.RandomForestClassifier
 
-        try:
+        if model_type == "lgb":
             import lightgbm as lgb
-            classes["lgb"] = lgb.LGBMClassifier
-        except ModuleNotFoundError:
-            pass
+            return lgb.LGBMClassifier
 
-        return classes
+        raise ValueError(f"Unknown model_type {model_type}")
+
+    def task_fields(self):
+        return ["num_classes"]
 
