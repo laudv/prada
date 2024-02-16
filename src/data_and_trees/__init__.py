@@ -29,8 +29,49 @@ def _get_dname_suggestion(dname):
                      for sugg in ALL_DATASET_NAMES]
         return ALL_DATASET_NAMES[np.argmax(distances)]
 
-def get_dataset(dname, *args, **kwargs):
+def parse_dataset_name(dname_and_options):
+    try:
+        i0 = dname_and_options.index('[')
+        i1 = dname_and_options.index(']')
+    except ValueError: # substring not found
+        return dname_and_options, None
+    dataset_name = dname_and_options[0:i0]
+    options_str = dname_and_options[i0+1:i1]
+
+    return dataset_name, options_str
+
+def derive_dataset(d, options_str):
+    if options_str is None:
+        return d
+
+    # multiclass one-vs-other transformation (e.g. Mnist[2v4])
+    if 'v' in options_str:
+        class1, class2 = tuple(map(int, options_str.split('v')))
+        d.load_dataset()
+        return d.one_vs_other(class1, class2)
+
+    # multiclass one-vs-rest transformation (e.g. Mnist[2v4])
+    if 'vRest' in options_str:
+        class1 = int(options_str[:-len("vRest")])
+        d.load_dataset()
+        return d.one_vs_rest(class1)
+
+    # TODO multiclass multi_vs_rest
+
+    # regression: turn into binary classification
+    if 'bin' in options_str:
+        assert d.is_regression()
+        d.load_dataset()
+        return d.to_binary()
+
+    # TODO multiclass to_multiclass
+
+    raise ValueError(f"invalid option string {options_str}")
+
+def get_dataset(dname_and_options, *args, **kwargs):
     import inspect
+
+    dname, options_str = parse_dataset_name(dname_and_options) 
 
     try:
         cls = globals()[dname]
@@ -38,7 +79,7 @@ def get_dataset(dname, *args, **kwargs):
         cls = None
 
     if inspect.isclass(cls) and issubclass(cls, Dataset):
-        return cls(*args, **kwargs)
+        return derive_dataset(cls(*args, **kwargs), options_str)
     else:
         dname_suggestion = _get_dname_suggestion(dname)
 

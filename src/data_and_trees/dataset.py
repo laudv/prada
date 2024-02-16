@@ -70,10 +70,10 @@ class Dataset:
         #Itest = self.Ifolds[fold]
         #Xtest = self.X.iloc[Itest, :]
         #ytest = self.y[Itest]
-        dtrain, dtest = self.fold(fold_index)
+        dtrain, dtest = self.train_and_test_fold(fold_index)
         return dtrain.X, dtrain.y, dtest.X, dtest.y
 
-    def fold(self, fold_index, nfolds=None):
+    def train_and_test_fold(self, fold_index, nfolds=None):
         fold = Fold(self, fold_index, nfolds=nfolds)
 
         mro = tuple(set(type(self).__mro__).intersection(
@@ -209,8 +209,6 @@ class Dataset:
     def paramgrid(self, **kwargs):
         import itertools
 
-        assert self.are_X_y_set()
-
         param_lists = {k: (v if isinstance(v, list) else [v])
                        for k, v in kwargs.items()}
         param_names = list(param_lists.keys())
@@ -221,15 +219,15 @@ class Dataset:
 
     def train(self, model_class, params):
         if not isinstance(self, TrainFold):
-            raise RuntimeError("train on a TrainFold (use `Dataset.fold()`)")
-
+            raise RuntimeError("train on a TrainFold "
+                               "(use `Dataset.train_and_test_fold()`)")
         train_time = time.time()
         clf = model_class(**params)
         clf.fit(self.X, self.y)
         train_time = time.time() - train_time
 
-        mtrain = self.metric(self._fold.ytrain, clf.predict(self._fold.Xtrain))
-        mtest =  self.metric(self._fold.ytest,  clf.predict(self._fold.Xtest))
+        mtrain = self.metric(self.fold.ytrain, clf.predict(self.fold.Xtrain))
+        mtest =  self.metric(self.fold.ytest,  clf.predict(self.fold.Xtest))
 
         return clf, mtrain, mtest, train_time
 
@@ -271,7 +269,7 @@ class Fold:
 class TrainFold:
     def __init__(self, fold):
         self.parent = fold.dataset
-        self._fold = fold
+        self.fold = fold
 
         # Dataset __init__
         super().__init__(self.parent.task,
@@ -290,7 +288,7 @@ class TrainFold:
 class TestFold:
     def __init__(self, fold):
         self.parent = fold.dataset
-        self._fold = fold
+        self.fold = fold
 
         # Dataset __init__
         super().__init__(self.parent.task,
@@ -317,7 +315,7 @@ class RegressionMixin:
 
         num_classes = len(quantiles) + 1
         binary = num_classes == 2
-        sup = (Dataset,) if binary else (Dataset, MulticlassMixin)
+        sup = (Dataset, BinaryMixin) if binary else (Dataset, MulticlassMixin)
         suffix = "BinClf" if binary else f"MultClf{num_classes}"
         task = Task.BINARY if binary else Task.MULTICLASS
         name = self.name() + suffix
@@ -331,13 +329,12 @@ class RegressionMixin:
         # Simulate load dataset
         # This needs to set the same fields as Dataset.load_dataset!
         d.X = self.X
-        d.y = y
-        d.Is = self.Is
-        d.Ifolds = self.Ifolds
+        d.y = pd.Series(y)
+        d.perm = self.perm
 
         return d
 
-    def metric(self, ytrue, ypred):
+    def metric(self, ytrue, ypred): # lower is better
         from sklearn.metrics import root_mean_squared_error
         return root_mean_squared_error(ytrue, ypred)
 
@@ -364,7 +361,7 @@ class RegressionMixin:
 
 class BinaryMixin:
 
-    def metric(self, ytrue, ypred):
+    def metric(self, ytrue, ypred): # higher is better
         from sklearn.metrics import accuracy_score
         return accuracy_score(ytrue, ypred)
 
@@ -450,7 +447,7 @@ class MulticlassMixin:
         assert self.is_multiclass()
 
         task = Task.BINARY
-        cls = type(f"{self.name()}{suffix}", (Dataset,), {})
+        cls = type(f"{self.name()}{suffix}", (Dataset, BinaryMixin), {})
         d = cls(task, nfolds=self.nfolds, seed=self.seed)
         d.multiclass = self
         d.mask = mask
@@ -458,20 +455,19 @@ class MulticlassMixin:
         # Similate load dataset
         # This needs to set the same fields as Dataset.load_dataset!
         if mask is not None:
-            d.X = self.X[mask]
-            d.y = class1_predicate(self.y[mask])
-            d.load_dataset() # new fold indices
+            d.X = self.X[mask].reset_index(drop=True)
+            d.y = class1_predicate(self.y.loc[mask].reset_index(drop=True))
+            d.load_dataset() # reset self.perm
         else:
             d.X = self.X
             d.y = class1_predicate(self.y)
-            d.Is = self.Is # reuse fold indices
-            d.Ifolds = self.Ifolds
+            d.perm = self.perm # reuse permutation
 
         d.y = d.y.astype(DTYPE)
 
         return d
 
-    def metric(self, ytrue, ypred):
+    def metric(self, ytrue, ypred): # higher is better
         from sklearn.metrics import accuracy_score
         return accuracy_score(ytrue, ypred)
 

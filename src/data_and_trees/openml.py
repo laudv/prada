@@ -107,11 +107,9 @@ for name, openml_id in [
         # Other OpenML
         ("AtlasHiggs",       45549),
         ("SantanderCustomerSatisfaction", 45566),
-        ("Nomao",            45078),
         #("VehicleSensIt",    357),  # http://www.csie.ntu.edu.tw/~cjlin/libsvmtools/datasets
         #("Prostate",         45672), # https://github.com/slds-lmu/paper_2023_ci_for_ge
         ("CensusIncomeKDD",  42750), # https://archive.ics.uci.edu/ml/datasets/Census-Income+(KDD)
-        ("Volkert",          41166), # https://competitions.codalab.org/competitions/2321
     ]:
     cls = _create_openml(name, openml_id, Task.BINARY, {})
     globals()[name] = cls
@@ -134,7 +132,8 @@ for name, openml_id, num_classes in [
         ("FashionMnist", 40996, 10),
 
         # https://github.com/EpistasisLab/penn-ml-benchmarks/tree/master/datasets/classification/fars
-        ("Fars", 40672, 8),
+        ("Fars",    40672, 8),
+        ("Volkert", 41166, 10), # https://competitions.codalab.org/competitions/2321
     ]:
     fields = {"num_classes": num_classes}
     cls = _create_openml(name, openml_id, Task.MULTICLASS, fields)
@@ -181,6 +180,12 @@ def _Phoneme_transform_X_y(self, X, y):
     return X, y
 Phoneme = _create_openml("Phoneme", 1489, Task.BINARY, {})
 setattr(Phoneme, "_transform_X_y", _Phoneme_transform_X_y)
+
+def _Nomao_transform_X_y(self, X, y):
+    y = (y == 2.0)
+    return X, y
+Nomao = _create_openml("Nomao", 45078, Task.BINARY, {})
+setattr(Nomao, "_transform_X_y", _Nomao_transform_X_y)
 
 def _Banknote_transform_X_y(self, X, y):
     y = (y == "1") # y values are in ['0', '1'] -> transform to binary
