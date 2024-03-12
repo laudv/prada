@@ -205,6 +205,33 @@ class Dataset:
         df = pd.DataFrame(X_scaled, columns=self.X.columns)
         self.X = df
 
+    def scale_target(self, quantile_lo=.1, quantile_hi=.9):
+        if self.X is None:
+            raise RuntimeError("data not loaded")
+        if not self.is_regression():
+            return
+
+        from sklearn import preprocessing
+
+        min_max_scaler = preprocessing.RobustScaler(
+                quantile_range=(quantile_lo*100.0, quantile_hi*100.0))
+        y = self.y.values.reshape(-1, 1)
+        y_scaled = min_max_scaler.fit_transform(y)
+        df = pd.Series(y_scaled.ravel())
+        self.y = df
+
+    def transform_target(self):
+        if self.X is None:
+            raise RuntimeError("data not loaded")
+        if not self.is_regression():
+            return
+
+        from sklearn.preprocessing import QuantileTransformer
+        qt = QuantileTransformer(n_quantiles=100)
+        y = self.y.values.reshape(-1, 1)
+        y_scaled = qt.fit_transform(y)
+        df = pd.Series(y_scaled.ravel())
+        self.y = df
 
     def paramgrid(self, **kwargs):
         import itertools
@@ -226,14 +253,43 @@ class Dataset:
         clf.fit(self.X, self.y)
         train_time = time.time() - train_time
 
-        mtrain = self.metric(self.fold.ytrain, clf.predict(self.fold.Xtrain))
-        mtest =  self.metric(self.fold.ytest,  clf.predict(self.fold.Xtest))
-
-        return clf, mtrain, mtest, train_time
+        return clf, train_time
 
     def hyperparam(self, model_class, **kwargs):
         for params in self.paramgrid(**kwargs):
             yield self.train(model_class, params)
+
+    def metric(self, *args):
+        try:
+            import veritas
+            VERITAS_EXISTS = True
+        except ModuleNotFoundError:
+            VERITAS_EXISTS = False
+
+        if len(args) == 1:
+            ytrue = self.y
+            ypred_or_clf, = args
+            if isinstance(ypred_or_clf, np.ndarray):
+                ypred = ypred_or_clf
+            elif VERITAS_EXISTS and isinstance(ypred_or_clf, veritas.AddTree):
+                at = ypred_or_clf
+                if self.is_binary():
+                    ypred = at.predict(self.X) > 0.5
+                elif self.is_regression():
+                    ypred = at.predict(self.X)
+                else:
+                    ypred = np.argmax(at.predict(self.X), axis=1)
+            else:
+                clf = ypred_or_clf
+                try:
+                    ypred = clf.predict(self.X)
+                except AttributeError:
+                    raise ValueError("metric(ypred:np.ndarray) or metric(clf)")
+        elif len(args) == 2:
+            ytrue, ypred = args
+        else:
+            raise ValueError()
+        return self._metric(ytrue, ypred)
             
 class Fold:
     def __init__(self, dataset, fold_index, nfolds=None):
@@ -334,7 +390,7 @@ class RegressionMixin:
 
         return d
 
-    def metric(self, ytrue, ypred): # lower is better
+    def _metric(self, ytrue, ypred): # lower is better
         from sklearn.metrics import root_mean_squared_error
         return root_mean_squared_error(ytrue, ypred)
 
@@ -361,7 +417,7 @@ class RegressionMixin:
 
 class BinaryMixin:
 
-    def metric(self, ytrue, ypred): # higher is better
+    def _metric(self, ytrue, ypred): # higher is better
         from sklearn.metrics import accuracy_score
         return accuracy_score(ytrue, ypred)
 
@@ -467,7 +523,7 @@ class MulticlassMixin:
 
         return d
 
-    def metric(self, ytrue, ypred): # higher is better
+    def _metric(self, ytrue, ypred): # higher is better
         from sklearn.metrics import accuracy_score
         return accuracy_score(ytrue, ypred)
 

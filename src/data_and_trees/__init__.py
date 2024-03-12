@@ -6,6 +6,7 @@ from .dataset import *
 from .openml import *
 from .other import *
 from .uci_mlr import *
+from .libsvm import *
 
 
 ALL_DATASETS = [cls for cls in Dataset.__subclasses__()]
@@ -44,17 +45,17 @@ def derive_dataset(d, options_str):
     if options_str is None:
         return d
 
-    # multiclass one-vs-other transformation (e.g. Mnist[2v4])
-    if 'v' in options_str:
-        class1, class2 = tuple(map(int, options_str.split('v')))
-        d.load_dataset()
-        return d.one_vs_other(class1, class2)
-
     # multiclass one-vs-rest transformation (e.g. Mnist[2v4])
     if 'vRest' in options_str:
         class1 = int(options_str[:-len("vRest")])
         d.load_dataset()
         return d.one_vs_rest(class1)
+
+    # multiclass one-vs-other transformation (e.g. Mnist[2v4])
+    if 'v' in options_str:
+        class1, class2 = tuple(map(int, options_str.split('v')))
+        d.load_dataset()
+        return d.one_vs_other(class1, class2)
 
     # TODO multiclass multi_vs_rest
 

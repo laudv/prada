@@ -1,4 +1,4 @@
-from .dataset import Dataset, Task, RegressionMixin
+from .dataset import Dataset, Task, RegressionMixin, MulticlassMixin
 
 import os
 import numpy as np
@@ -17,8 +17,6 @@ class Img(Dataset, RegressionMixin):
             self.X = pd.read_hdf(data_path, "X")
             self.X.columns = [f"a{i}" for i in range(self.X.shape[1])]
             self.y = pd.read_hdf(data_path, "y")
-            #self.threshold = np.median(self.yreal)
-            #self.y = self.yreal >= self.threshold
             super().load_dataset()
 
     def read_from_img(self, fname):
@@ -33,3 +31,24 @@ class Img(Dataset, RegressionMixin):
         data_path = os.path.join(self.data_dir, Img.dataset_name)
         df.to_hdf(data_path, key='X', mode='w') 
         dfy.to_hdf(data_path, key='y', mode='a') 
+
+class Chaahat(Dataset, MulticlassMixin):
+    dataset_name = "chaahat_blocks4_"
+
+    def __init__(self, **kwargs):
+        super().__init__(Task.MULTICLASS, **kwargs)
+
+    def load_dataset(self):
+        if self.X is None or self.y is None:
+            Xs, ys = [], []
+            for xname, yname in [("trainX", "trainY"), ("testX", "testY")]:
+                fnamex = os.path.join(self.data_dir, f"{Chaahat.dataset_name}{xname}")
+                fnamey = os.path.join(self.data_dir, f"{Chaahat.dataset_name}{yname}")
+                Xs.append(pd.read_hdf(fnamex))
+                ys.append(pd.read_hdf(fnamey))
+            self.X = pd.concat(Xs, ignore_index=True)
+            self.X.columns = [f"a{i}" for i in range(self.X.shape[1])]
+            self.yscores = pd.concat(ys, ignore_index=True)
+            self.y = self.yscores.idxmax(axis=1)
+            super().load_dataset()
+            self.num_classes = self.yscores.shape[1]
