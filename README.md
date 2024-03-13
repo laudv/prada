@@ -11,6 +11,14 @@ datasets:
 export PRADA_DATA_DIR=/your/data/cache/directory
 ```
 
+## Install
+
+*PraDa* is currently not a PyPI package, but you can install it straight from
+Github (https://pip.pypa.io/en/stable/topics/vcs-support/)
+```sh
+pip install git+https://github.com/laudv/prada.git
+```
+
 ## Loading a dataset
 
 List all the datasets:
@@ -57,7 +65,7 @@ d = prada.get_dataset("WineQuality[bin]")
 
 d = prada.WineQuality()
 d.load_dataset()
-d.to_binary()
+d.to_binary(frac_positive=0.5)
 ```
 
 For more of these functions, have a look at the `RegressionMixin` and
@@ -86,15 +94,15 @@ This prints:
 
 Train a model for a given parameter set:
 ```python
-model_type = "xgb" # or "rf", "lgb"
 dtrain, dtest = d.train_and_test_fold(fold)
 dtrain, dvalid = dtrain.train_and_test_fold(0)
 
 # `model_class` can be any sklearn compatible classifier.
 # There is built-in support for
-#   - sklearn RandomForet
-#   - xgboost
-#   - lightgbm
+#   - rf:  sklearn RandomForest
+#   - xgb: xgboost
+#   - lgb: lightgbm
+model_type = "xgb" # or "rf", "lgb"
 model_class = d.get_model_class(model_type)
 clf, train_time = dtrain.train(model_class, params)
 
