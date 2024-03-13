@@ -8,7 +8,7 @@ OPENML_DATASETS = []
 
 # https://huggingface.co/datasets/inria-soda/tabular-benchmark
 
-def _create_openml(name, openml_id, task, fields):
+def _create_openml(name, openml_id, task, fields, transform_y=None):
     if task == Task.MULTICLASS:
         sup = (Dataset, MulticlassMixin)
     elif task == Task.REGRESSION:
@@ -30,8 +30,15 @@ def _create_openml(name, openml_id, task, fields):
             self.X, self.y = self._load_openml(self.name(), self.openml_id)
             super(cls, self).load_dataset()
 
+    def _transform_X_y(self, X, y):
+        if transform_y is not None:
+            return X, transform_y(y)
+        else:
+            return X, y
+
     cls.__init__ = __init__
     cls.load_dataset = load_dataset
+    cls._transform_X_y = _transform_X_y
 
     OPENML_DATASETS.append(cls)
 
@@ -39,7 +46,7 @@ def _create_openml(name, openml_id, task, fields):
 
 
 # -- REGRESSION -------------------------------------------------------------- #
-for name, openml_id in [
+for tup in [
         # Tabular benchmark versions
         ("CpuAct",          44132),
         ("Pol",             44133),
@@ -76,9 +83,22 @@ for name, openml_id in [
         ("Yolanda", 42705), # https://automl.chalearn.org/data
 
         ("CpuSmall", 227),
-        ("BreastCancer", 15),
+        ("BreastCancer", 15, lambda y: y=="malignant"),
+        ("Vehicle", 54, lambda y: (y == "bus") | (y == "van")),
+        ("Spambase", 44, lambda y: (y == "1")),
+        ("Phoneme", 1489, lambda y: (y == "1")),
+        ("Nomao", 45078, lambda y: (y == 2.0)),
+        ("Banknote", 1462, lambda y: (y == "1")),
+
     ]:
-    cls = _create_openml(name, openml_id, Task.REGRESSION, {})
+
+    if len(tup) == 2:
+        name, openml_id = tup
+        transform_y = None
+    else:
+        name, openml_id, transform_y = tup
+
+    cls = _create_openml(name, openml_id, Task.REGRESSION, {}, transform_y)
     globals()[name] = cls
 
 # -- BINARY ------------------------------------------------------------------ #
@@ -163,36 +183,6 @@ def _Adult_transform_X_y(self, X, y):
 Adult = _create_openml("Adult", 179, Task.BINARY, {})
 setattr(Adult, "_transform_X_y", _Adult_transform_X_y)
 
-def _Vehicle_transform_X_y(self, X, y):
-    y = (y == "bus") | (y == "van")
-    return X, y
-Vehicle = _create_openml("Vehicle", 54, Task.BINARY, {})
-setattr(Vehicle, "_transform_X_y", _Vehicle_transform_X_y)
-
-def _Spambase_transform_X_y(self, X, y):
-    y = (y == "1") # y values are in ['0', '1'] -> transform to binary
-    return X, y
-Spambase = _create_openml("Spambase", 44, Task.BINARY, {})
-setattr(Spambase, "_transform_X_y", _Spambase_transform_X_y)
-
-def _Phoneme_transform_X_y(self, X, y):
-    y = (y == "1") # y values are in ['0', '1'] -> transform to binary
-    return X, y
-Phoneme = _create_openml("Phoneme", 1489, Task.BINARY, {})
-setattr(Phoneme, "_transform_X_y", _Phoneme_transform_X_y)
-
-def _Nomao_transform_X_y(self, X, y):
-    y = (y == 2.0)
-    return X, y
-Nomao = _create_openml("Nomao", 45078, Task.BINARY, {})
-setattr(Nomao, "_transform_X_y", _Nomao_transform_X_y)
-
-def _Banknote_transform_X_y(self, X, y):
-    y = (y == "1") # y values are in ['0', '1'] -> transform to binary
-    return X, y
-Banknote = _create_openml("Banknote", 1462, Task.BINARY, {})
-setattr(Banknote, "_transform_X_y", _Banknote_transform_X_y)
-
 def _KddCup99_transform_X_y(self, X, y):
     X["service_ecr_i"] = (X.service == "ecr_i")
     X["service_priv"] = (X.service == "private")
@@ -207,9 +197,6 @@ def _KddCup99_transform_X_y(self, X, y):
     return X, y
 KddCup99 = _create_openml("KddCup99", 1113, Task.BINARY, {})
 setattr(KddCup99, "_transform_X_y", _KddCup99_transform_X_y)
-
-
-
 
 def _AmesHousing_transform_X_y(self, X, y):
     XX = pd.get_dummies(X, columns=['MSZoning', 'Street', 'Alley',

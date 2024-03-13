@@ -3,7 +3,7 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = ""
+name = "prada"
 version = "0.2.0"
 authors = [
   { name="Laurens Devos" },
@@ -15,4 +15,9 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
+]
+dependencies = [
+    "scikit-learn >= 1.4",
+    "numpy >= 1.26",
+    "pandas >= 2.0",
 ]

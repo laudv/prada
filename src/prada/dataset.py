@@ -1,3 +1,4 @@
+import sys
 import os
 import time
 import enum
@@ -5,13 +6,13 @@ import numpy as np
 import pandas as pd
 
 try:
-    DATA_DIR = os.environ["DATA_AND_TREES_DATA_DIR"]
+    DATA_DIR = os.environ["PRADA_DATA_DIR"]
 except KeyError as e:
     print()
-    print("| Environment variable DATA_AND_TREES_DATA_DIR not set. This is the")
-    print("| path to the folder where DATA_AND_TREES stores the cached and")
+    print("| Environment variable PRADA_DATA_DIR not set. This is the")
+    print("| path to the folder where PraDa stores the cached and")
     print("| compressed HDF5 files. Set the variable like this (unix):")
-    print("|     `export DATA_AND_TREES_DATA_DIR=/path/to/data/dir`")
+    print("|     `export PRADA_DATA_DIR=/path/to/data/dir`")
     print()
     raise e
 
@@ -19,17 +20,20 @@ NFOLDS = 5
 SEED = 2537254
 DTYPE = np.float32
 
+
 class Task(enum.Enum):
     REGRESSION = 1
     BINARY = 2
     MULTICLASS = 3
 
+
 class Dataset:
-    def __init__(self, task, nfolds=NFOLDS, seed=SEED):
+    def __init__(self, task, nfolds=NFOLDS, seed=SEED, silent=False):
         self.task = task
         self.data_dir = DATA_DIR
         self.nfolds = nfolds
         self.seed = seed
+        self.silent = silent
         self.source = "manual"
         self.url = "unknown"
 
@@ -51,7 +55,7 @@ class Dataset:
     def are_X_y_set(self):
         return self.X is not None and self.y is not None
 
-    def load_dataset(self): # populate X, y
+    def load_dataset(self):  # populate X, y
         if self.X is None or self.y is None:
             raise RuntimeError("override this and call after loading X and y")
         N = self.X.shape[0]
@@ -59,34 +63,29 @@ class Dataset:
         rng = np.random.default_rng(self.seed)
         self.perm = rng.permutation(N)
 
-        #fold_size = self.Is.shape[0] / self.nfolds
-        #self.Ifolds = [self.Is[int(i*fold_size):int((i+1)*fold_size)]
-        #               for i in range(self.nfolds)]
-
     def train_and_test_set(self, fold_index):
-        #Itrain = np.hstack([self.Ifolds[j] for j in range(self.nfolds) if fold!=j])
-        #Xtrain = self.X.iloc[Itrain, :]
-        #ytrain = self.y[Itrain]
-        #Itest = self.Ifolds[fold]
-        #Xtest = self.X.iloc[Itest, :]
-        #ytest = self.y[Itest]
         dtrain, dtest = self.train_and_test_fold(fold_index)
         return dtrain.X, dtrain.y, dtest.X, dtest.y
 
     def train_and_test_fold(self, fold_index, nfolds=None):
         fold = Fold(self, fold_index, nfolds=nfolds)
 
-        mro = tuple(set(type(self).__mro__).intersection(
-            {RegressionMixin, BinaryMixin, MulticlassMixin, Dataset}))
+        mro = tuple(
+            set(type(self).__mro__).intersection(
+                {RegressionMixin, BinaryMixin, MulticlassMixin, Dataset}
+            )
+        )
         assert type(self) not in mro
 
         # Create subtype to ensure presence of relevant mixin
-        train_fold_type = type(f"{self.name()}_TrnFold{fold_index}",
-                               (TrainFold,) + mro, {})
+        train_fold_type = type(
+            f"{self.name()}_TrnFold{fold_index}", (TrainFold,) + mro, {}
+        )
         train_fold = train_fold_type(fold)
 
-        test_fold_type = type(f"{self.name()}_TstFold{fold_index}",
-                               (TestFold,) + mro, {})
+        test_fold_type = type(
+            f"{self.name()}_TstFold{fold_index}", (TestFold,) + mro, {}
+        )
         test_fold = test_fold_type(fold)
 
         for f in self.task_fields():
@@ -108,7 +107,8 @@ class Dataset:
 
     def load_hdf5(self):
         h5file = self._cached_hdf5_name()
-        print(f"loading cached {h5file}")
+        if not self.silent:
+            print(f"loading cached {h5file}")
         X = pd.read_hdf(h5file, key="X")
         y = pd.read_hdf(h5file, key="y")
         return X, y
@@ -122,7 +122,8 @@ class Dataset:
         from sklearn.datasets import fetch_openml
 
         if not self.hdf5_exists() or force:
-            print(f"loading {name} with fetch_openml")
+            if not self.silent:
+                print(f"loading {name} with fetch_openml")
             X, y = fetch_openml(data_id=data_id, return_X_y=True, as_frame=True)
             X, y = self._transform_X_y(X, y)
             X, y = self._cast_X_y(X, y)
@@ -135,7 +136,8 @@ class Dataset:
         from scipy.io.arff import loadarff
 
         if not self.hdf5_exists() or force:
-            print(f"loading {name} from arff file")
+            if not self.silent:
+                print(f"loading {name} from arff file")
             data = loadarff(os.path.join(self.data_dir, name))
             X, y = self._transform_X_y(data, None)
             X, y = self._cast_X_y(X, y)
@@ -148,7 +150,8 @@ class Dataset:
         import gzip
 
         if not self.hdf5_exists() or force:
-            print(f"loading {name} from gzipped csv file")
+            if not self.silent:
+                print(f"loading {name} from gzipped csv file")
             with gzip.open(os.path.join(self.data_dir, name), "rb") as f:
                 data = pd.read_csv(f, **read_csv_kwargs)
             X, y = self._transform_X_y(data, None)
@@ -168,11 +171,12 @@ class Dataset:
 
         # TODO complete
 
-    def _transform_X_y(self, X, y): # override if necessary
+    def _transform_X_y(self, X, y):  # override if necessary
         return X, y
 
     def _cast_X_y(self, X, y):
         from sklearn.preprocessing import OrdinalEncoder
+
         if self.task != Task.REGRESSION and not np.isreal(y[0]):
             self.target_encoder = OrdinalEncoder(dtype=DTYPE)
             y = self.target_encoder.fit_transform(y.to_numpy().reshape(-1, 1))
@@ -192,7 +196,7 @@ class Dataset:
         df = pd.DataFrame(X_scaled, columns=self.X.columns)
         self.X = df
 
-    def robust_normalize(self, quantile_lo=.1, quantile_hi=.9):
+    def robust_normalize(self, quantile_lo=0.1, quantile_hi=0.9):
         if self.X is None:
             raise RuntimeError("data not loaded")
 
@@ -200,12 +204,13 @@ class Dataset:
 
         X = self.X.values
         min_max_scaler = preprocessing.RobustScaler(
-                quantile_range=(quantile_lo*100.0, quantile_hi*100.0))
+            quantile_range=(quantile_lo * 100.0, quantile_hi * 100.0)
+        )
         X_scaled = min_max_scaler.fit_transform(X)
         df = pd.DataFrame(X_scaled, columns=self.X.columns)
         self.X = df
 
-    def scale_target(self, quantile_lo=.1, quantile_hi=.9):
+    def scale_target(self, quantile_lo=0.1, quantile_hi=0.9):
         if self.X is None:
             raise RuntimeError("data not loaded")
         if not self.is_regression():
@@ -214,7 +219,8 @@ class Dataset:
         from sklearn import preprocessing
 
         min_max_scaler = preprocessing.RobustScaler(
-                quantile_range=(quantile_lo*100.0, quantile_hi*100.0))
+            quantile_range=(quantile_lo * 100.0, quantile_hi * 100.0)
+        )
         y = self.y.values.reshape(-1, 1)
         y_scaled = min_max_scaler.fit_transform(y)
         df = pd.Series(y_scaled.ravel())
@@ -227,6 +233,7 @@ class Dataset:
             return
 
         from sklearn.preprocessing import QuantileTransformer
+
         qt = QuantileTransformer(n_quantiles=100)
         y = self.y.values.reshape(-1, 1)
         y_scaled = qt.fit_transform(y)
@@ -236,8 +243,9 @@ class Dataset:
     def paramgrid(self, **kwargs):
         import itertools
 
-        param_lists = {k: (v if isinstance(v, list) else [v])
-                       for k, v in kwargs.items()}
+        param_lists = {
+            k: (v if isinstance(v, list) else [v]) for k, v in kwargs.items()
+        }
         param_names = list(param_lists.keys())
 
         for instance in itertools.product(*param_lists.values()):
@@ -246,8 +254,9 @@ class Dataset:
 
     def train(self, model_class, params):
         if not isinstance(self, TrainFold):
-            raise RuntimeError("train on a TrainFold "
-                               "(use `Dataset.train_and_test_fold()`)")
+            raise RuntimeError(
+                "train on a TrainFold " "(use `Dataset.train_and_test_fold()`)"
+            )
         train_time = time.time()
         clf = model_class(**params)
         clf.fit(self.X, self.y)
@@ -262,13 +271,14 @@ class Dataset:
     def metric(self, *args):
         try:
             import veritas
+
             VERITAS_EXISTS = True
         except ModuleNotFoundError:
             VERITAS_EXISTS = False
 
         if len(args) == 1:
             ytrue = self.y
-            ypred_or_clf, = args
+            (ypred_or_clf,) = args
             if isinstance(ypred_or_clf, np.ndarray):
                 ypred = ypred_or_clf
             elif VERITAS_EXISTS and isinstance(ypred_or_clf, veritas.AddTree):
@@ -290,16 +300,21 @@ class Dataset:
         else:
             raise ValueError()
         return self._metric(ytrue, ypred)
-            
+
+
 class Fold:
     def __init__(self, dataset, fold_index, nfolds=None):
         if not isinstance(dataset, Dataset):
             raise ValueError("Not a dataset")
         if isinstance(dataset, TestFold):
-            print("Warning: fold on TestFold")
+            print(
+                "Warning: fold on TestFold.",
+                "For nested cross-validation, use TrainFold instead.",
+                fout=sys.stderr,
+            )
 
         self.nfolds = nfolds
-        if nfolds is None:
+        if self.nfolds is None:
             self.nfolds = dataset.nfolds
 
         if fold_index >= self.nfolds or fold_index < 0:
@@ -310,17 +325,18 @@ class Fold:
 
         fold_size = dataset.perm.shape[0] / self.nfolds
         test_start = int(fold_index * fold_size)
-        test_end = int((fold_index+1) * fold_size)
+        test_end = int((fold_index + 1) * fold_size)
 
         self.perm_test = dataset.perm[test_start:test_end]
-        self.perm_train = np.hstack((
-            dataset.perm[:test_start],
-            dataset.perm[test_end:]))
-        
+        self.perm_train = np.hstack(
+            (dataset.perm[:test_start], dataset.perm[test_end:])
+        )
+
         self.Xtrain = dataset.X.loc[self.perm_train, :]
         self.ytrain = dataset.y.loc[self.perm_train]
         self.Xtest = dataset.X.loc[self.perm_test, :]
         self.ytest = dataset.y.loc[self.perm_test]
+
 
 class TrainFold:
     def __init__(self, fold):
@@ -328,9 +344,9 @@ class TrainFold:
         self.fold = fold
 
         # Dataset __init__
-        super().__init__(self.parent.task,
-                         nfolds=fold.nfolds - 1,
-                         seed=self.parent.seed)
+        super().__init__(
+            self.parent.task, nfolds=fold.nfolds - 1, seed=self.parent.seed
+        )
 
         # should set fields as `DataSet.load_dataset`
 
@@ -341,15 +357,14 @@ class TrainFold:
     def load_dataset(self):
         raise RuntimeError("Cannot load TrainFold")
 
+
 class TestFold:
     def __init__(self, fold):
         self.parent = fold.dataset
         self.fold = fold
 
         # Dataset __init__
-        super().__init__(self.parent.task,
-                         nfolds=1,
-                         seed=self.parent.seed)
+        super().__init__(self.parent.task, nfolds=1, seed=self.parent.seed)
 
         self.perm = fold.perm_test
         self.X = fold.Xtest
@@ -358,8 +373,8 @@ class TestFold:
     def load_dataset(self):
         raise RuntimeError("Cannot load TestFold")
 
-class RegressionMixin:
 
+class RegressionMixin:
     def to_binary(self, frac_positive=0.5, right=False):
         return self.to_multiclass([frac_positive], right)
 
@@ -390,8 +405,9 @@ class RegressionMixin:
 
         return d
 
-    def _metric(self, ytrue, ypred): # lower is better
+    def _metric(self, ytrue, ypred):  # lower is better
         from sklearn.metrics import root_mean_squared_error
+
         return root_mean_squared_error(ytrue, ypred)
 
     def metric_name(self):
@@ -400,14 +416,17 @@ class RegressionMixin:
     def get_model_class(self, model_type):
         if model_type == "xgb":
             import xgboost as xgb
+
             return xgb.XGBRegressor
 
         if model_type == "rf":
             import sklearn.ensemble
+
             return sklearn.ensemble.RandomForestRegressor
 
         if model_type == "lgb":
             import lightgbm as lgb
+
             return lgb.LGBMRegressor
 
         raise ValueError(f"Unknown model_type {model_type}")
@@ -415,10 +434,11 @@ class RegressionMixin:
     def task_fields(self):
         return []
 
-class BinaryMixin:
 
-    def _metric(self, ytrue, ypred): # higher is better
+class BinaryMixin:
+    def _metric(self, ytrue, ypred):  # higher is better
         from sklearn.metrics import accuracy_score
+
         return accuracy_score(ytrue, ypred)
 
     def metric_name(self):
@@ -427,14 +447,17 @@ class BinaryMixin:
     def get_model_class(self, model_type):
         if model_type == "xgb":
             import xgboost as xgb
+
             return xgb.XGBClassifier
 
         if model_type == "rf":
             import sklearn.ensemble
+
             return sklearn.ensemble.RandomForestClassifier
 
         if model_type == "lgb":
             import lightgbm as lgb
+
             return lgb.LGBMClassifier
 
         raise ValueError(f"Unknown model_type {model_type}")
@@ -442,8 +465,8 @@ class BinaryMixin:
     def task_fields(self):
         return []
 
-class MulticlassMixin:
 
+class MulticlassMixin:
     def one_vs_other(self, class1, class2):
         assert self.is_multiclass()
 
@@ -455,6 +478,7 @@ class MulticlassMixin:
             raise ValueError("take class1 < class2")
 
         mask = (self.y == class1) | (self.y == class2)
+
         def class1_predicate(y):
             return y == class2
 
@@ -488,7 +512,7 @@ class MulticlassMixin:
             for c in trueclasses:
                 if c not in range(num_classes):
                     raise ValueError(f"invalid class {c}")
-                ynew[y==c] = 1.0
+                ynew[y == c] = 1.0
             return pd.Series(ynew)
 
         d = self.to_binary(suffix, class1_predicate)
@@ -513,18 +537,19 @@ class MulticlassMixin:
         if mask is not None:
             d.X = self.X[mask].reset_index(drop=True)
             d.y = class1_predicate(self.y.loc[mask].reset_index(drop=True))
-            d.load_dataset() # reset self.perm
+            d.load_dataset()  # reset self.perm
         else:
             d.X = self.X
             d.y = class1_predicate(self.y)
-            d.perm = self.perm # reuse permutation
+            d.perm = self.perm  # reuse permutation
 
         d.y = d.y.astype(DTYPE)
 
         return d
 
-    def _metric(self, ytrue, ypred): # higher is better
+    def _metric(self, ytrue, ypred):  # higher is better
         from sklearn.metrics import accuracy_score
+
         return accuracy_score(ytrue, ypred)
 
     def metric_name(self):
@@ -533,18 +558,20 @@ class MulticlassMixin:
     def get_model_class(self, model_type):
         if model_type == "xgb":
             import xgboost as xgb
+
             return xgb.XGBClassifier
 
         if model_type == "rf":
             import sklearn.ensemble
+
             return sklearn.ensemble.RandomForestClassifier
 
         if model_type == "lgb":
             import lightgbm as lgb
+
             return lgb.LGBMClassifier
 
         raise ValueError(f"Unknown model_type {model_type}")
 
     def task_fields(self):
         return ["num_classes"]
-
