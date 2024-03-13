@@ -20,4 +20,5 @@ dependencies = [
     "scikit-learn >= 1.4",
     "numpy >= 1.26",
     "pandas >= 2.0",
+    "tables >= 3.8",
 ]

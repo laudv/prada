@@ -81,14 +81,7 @@ for tup in [
         # https://archive.ics.uci.edu/ml/datasets/yearpredictionmsd
         ("Year",    44027),
         ("Yolanda", 42705), # https://automl.chalearn.org/data
-
         ("CpuSmall", 227),
-        ("BreastCancer", 15, lambda y: y=="malignant"),
-        ("Vehicle", 54, lambda y: (y == "bus") | (y == "van")),
-        ("Spambase", 44, lambda y: (y == "1")),
-        ("Phoneme", 1489, lambda y: (y == "1")),
-        ("Nomao", 45078, lambda y: (y == 2.0)),
-        ("Banknote", 1462, lambda y: (y == "1")),
 
     ]:
 
@@ -102,7 +95,7 @@ for tup in [
     globals()[name] = cls
 
 # -- BINARY ------------------------------------------------------------------ #
-for name, openml_id in [
+for tup in [
         # Tabular benchmark versions
         ("Electricity",      44156),
         ("CovtypeNumeric",   44121),
@@ -129,8 +122,21 @@ for name, openml_id in [
         ("SantanderCustomerSatisfaction", 45566),
         #("VehicleSensIt",    357),  # http://www.csie.ntu.edu.tw/~cjlin/libsvmtools/datasets
         #("Prostate",         45672), # https://github.com/slds-lmu/paper_2023_ci_for_ge
-        ("CensusIncomeKDD",  42750), # https://archive.ics.uci.edu/ml/datasets/Census-Income+(KDD)
+        # https://archive.ics.uci.edu/ml/datasets/Census-Income+(KDD)
+        ("CensusIncomeKDD",  42750),
+        ("BreastCancer", 15, lambda y: y=="malignant"),
+        ("Vehicle", 54, lambda y: (y == "bus") | (y == "van")),
+        ("Spambase", 44, lambda y: (y == "1")),
+        ("Phoneme", 1489, lambda y: (y == "1")),
+        ("Nomao", 45078, lambda y: (y == 2.0)),
+        ("Banknote", 1462, lambda y: (y == "1")),
     ]:
+
+    if len(tup) == 2:
+        name, openml_id = tup
+        transform_y = None
+    else:
+        name, openml_id, transform_y = tup
     cls = _create_openml(name, openml_id, Task.BINARY, {})
     globals()[name] = cls
 
