@@ -1,10 +1,18 @@
 [build-system]
-requires = [
-    "setuptools>=42",
-    "joblib",
-    "numpy",
-    "pandas",
-    "scikit-learn",
-    "wheel"
-]
+requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
+
+[project]
+name = ""
+version = "0.2.0"
+authors = [
+  { name="Laurens Devos" },
+]
+description = "PraDA: a fine selection of PRActical tabular DAtasets"
+readme = "README.md"
+requires-python = ">=3.8"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
