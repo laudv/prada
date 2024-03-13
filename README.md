@@ -14,7 +14,6 @@ export PRADA_DATA_DIR=/your/data/cache/directory
 ## Loading a dataset
 
 List all the datasets:
-
 ```python
 import prada
 prada.ALL_DATASETS
@@ -25,7 +24,6 @@ prada.ALL_MULTICLASS
 ```
 
 Load a dataset using the class name:
-
 ```python
 d = prada.Phoneme()
 d.load_dataset()
@@ -35,14 +33,12 @@ d.y.shape # (5404,)
 ```
 
 Load a dataset using a name of a dataset:
-
 ```python
 d = prada.get_dataset("Phoneme")
 ```
 
 Load a multiclass dataset and turn it into a binary dataset by comparing only
 two classes:
-
 ```python
 d = prada.Mnist()
 d.load_dataset()
@@ -54,7 +50,6 @@ d = prada.get_dataset("Mnist[2v4]")
 ```
 
 Similarly, turn a regression dataset into a (binary) classification dataset:
-
 ```python
 d = prada.get_dataset("WineQuality[bin]")
 
@@ -72,7 +67,6 @@ For more of these functions, have a look at the `RegressionMixin` and
 ## Hyper-parameter optimization
 
 Iterate over a grid of parameters:
-
 ```python
 d = prada.Spambase()
 d.load_dataset()
@@ -83,7 +77,6 @@ for i, params in enumerate(d.paramgrid(**param_dict)):
 ```
 
 This prints:
-
 ```
 0 {'n_estimators': 10, 'eta': 0.5}
 1 {'n_estimators': 10, 'eta': 0.9}
@@ -92,7 +85,6 @@ This prints:
 ```
 
 Train a model for a given parameter set:
-
 ```python
 model_type = "xgb" # or "rf", "lgb"
 dtrain, dtest = d.train_and_test_fold(fold)
