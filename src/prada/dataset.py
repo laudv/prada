@@ -72,7 +72,13 @@ class Dataset:
 
         mro = tuple(
             set(type(self).__mro__).intersection(
-                {RegressionMixin, BinaryMixin, MulticlassMixin, Dataset}
+                {
+                    RegressionMixin,
+                    BinaryMixin,
+                    MulticlassMixin,
+                    BinaryToRegMixin,
+                    Dataset,
+                }
             )
         )
         assert type(self) not in mro
@@ -96,7 +102,7 @@ class Dataset:
 
     def astype(self, dtype):
         self.X = self.X.astype(dtype)
-        self.y = self.y.astype(dtype)
+        #self.y = self.y.astype(dtype)
 
     def _cached_hdf5_name(self):
         return os.path.join(self.data_dir, f"{self.name()}.h5")
@@ -306,12 +312,6 @@ class Fold:
     def __init__(self, dataset, fold_index, nfolds=None):
         if not isinstance(dataset, Dataset):
             raise ValueError("Not a dataset")
-        if isinstance(dataset, TestFold):
-            print(
-                "Warning: fold on TestFold.",
-                "For nested cross-validation, use TrainFold instead.",
-                fout=sys.stderr,
-            )
 
         self.nfolds = nfolds
         if self.nfolds is None:
@@ -436,6 +436,30 @@ class RegressionMixin:
 
 
 class BinaryMixin:
+    def to_regression(self, neg_value = -1.0, pos_value = +1.0, threshold=0.0):
+        assert self.are_X_y_set()
+        y = (self.y == 0.0) * neg_value + (self.y == 1.0) * pos_value
+        y = y.astype(DTYPE)
+        sup = (Dataset, BinaryToRegMixin)
+        suffix = "ToReg"
+        task = Task.REGRESSION
+        name = self.name() + suffix
+
+        cls = type(name, sup, {})
+        d = cls(task, nfolds=self.nfolds, seed=self.seed)
+        d.neg_value = neg_value
+        d.pos_value = pos_value
+        d.threshold = threshold
+        d.binary = self
+
+        # Simulate load dataset
+        # This needs to set the same fields as Dataset.load_dataset!
+        d.X = self.X
+        d.y = y
+        d.perm = self.perm
+
+        return d
+
     def _metric(self, ytrue, ypred):  # higher is better
         from sklearn.metrics import accuracy_score
 
@@ -575,3 +599,33 @@ class MulticlassMixin:
 
     def task_fields(self):
         return ["num_classes"]
+
+class BinaryToRegMixin:
+    def _metric(self, ytrue, ypred):  # higher is better
+        from sklearn.metrics import accuracy_score
+
+        return accuracy_score(ytrue > self.threshold, ypred > self.threshold)
+
+    def metric_name(self):
+        return "thresholded_accuracy"
+
+    def get_model_class(self, model_type):
+        if model_type == "xgb":
+            import xgboost as xgb
+
+            return xgb.XGBRegressor
+
+        if model_type == "rf":
+            import sklearn.ensemble
+
+            return sklearn.ensemble.RandomForestRegressor
+
+        if model_type == "lgb":
+            import lightgbm as lgb
+
+            return lgb.LGBMRegressor
+
+        raise ValueError(f"Unknown model_type {model_type}")
+
+    def task_fields(self):
+        return ["neg_value", "pos_value", "threshold"]

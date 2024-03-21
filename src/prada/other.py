@@ -52,3 +52,24 @@ class Chaahat(Dataset, MulticlassMixin):
             self.y = self.yscores.idxmax(axis=1)
             super().load_dataset()
             self.num_classes = self.yscores.shape[1]
+
+    def to_singletarget(self, target):
+        assert self.are_X_y_set()
+        y = self.yscores.iloc[:, target]
+        sup = (Dataset, RegressionMixin)
+        suffix = f"RegTarget{target}"
+        task = Task.REGRESSION
+        name = self.name() + suffix
+
+        cls = type(name, sup, {})
+        d = cls(task, nfolds=self.nfolds, seed=self.seed)
+        d.target = target
+        d.multitarget = self
+
+        # Simulate load dataset
+        # This needs to set the same fields as Dataset.load_dataset!
+        d.X = self.X
+        d.y = y
+        d.perm = self.perm
+
+        return d

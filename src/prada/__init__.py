@@ -7,6 +7,7 @@ from .openml import *
 from .other import *
 from .uci_mlr import *
 from .libsvm import *
+from .blocksworld import *
 
 
 ALL_DATASETS = [cls for cls in Dataset.__subclasses__()]
