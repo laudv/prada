@@ -137,7 +137,7 @@ for tup in [
         transform_y = None
     else:
         name, openml_id, transform_y = tup
-    cls = _create_openml(name, openml_id, Task.BINARY, {})
+    cls = _create_openml(name, openml_id, Task.BINARY, {}, transform_y)
     globals()[name] = cls
 
 # -- MULTICLASS -------------------------------------------------------------- #
