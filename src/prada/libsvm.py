@@ -1,15 +1,15 @@
 import os
 import pandas as pd
 
-from .dataset import Dataset, Task, BinaryMixin
+from .dataset import Binary
 
 # https://www.csie.ntu.edu.tw/~cjlin/libsvmtools/datasets/binary.html
 
-class Ijcnn1(Dataset, BinaryMixin):
+class Ijcnn1(Binary):
     dataset_name = "ijcnn1.h5"
 
-    def __init__(self, **kwargs):
-        super().__init__(Task.BINARY, **kwargs)
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
 
     def load_dataset(self):
         if self.X is None or self.y is None:
@@ -28,11 +28,11 @@ class Ijcnn1(Dataset, BinaryMixin):
             self.minmax_normalize()
             super().load_dataset()
 
-class Webspam(Dataset, BinaryMixin):
+class Webspam(Binary):
     dataset_name = "webspam_wc_normalized_unigram.h5"
 
-    def __init__(self, **kwargs):
-        super().__init__(Task.BINARY, **kwargs)
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
 
     def load_dataset(self):
         if self.X is None or self.y is None:

@@ -1,9 +1,11 @@
-import sys
 import os
 import time
-import enum
+import copy
 import numpy as np
 import pandas as pd
+
+from sklearn.metrics import accuracy_score, balanced_accuracy_score, root_mean_squared_error
+from sklearn.preprocessing import OneHotEncoder
 
 try:
     DATA_DIR = os.environ["PRADA_DATA_DIR"]
@@ -16,89 +18,124 @@ except KeyError as e:
     print()
     raise e
 
-NFOLDS = 5
 SEED = 2537254
 DTYPE = np.float32
 
 
-class Task(enum.Enum):
-    REGRESSION = 1
-    BINARY = 2
-    MULTICLASS = 3
-
-
 class Dataset:
-    def __init__(self, task, nfolds=NFOLDS, seed=SEED, silent=False):
-        self.task = task
+    def __init__(self, metric, seed=SEED, silent=False):
         self.data_dir = DATA_DIR
-        self.nfolds = nfolds
         self.seed = seed
         self.silent = silent
         self.source = "manual"
         self.url = "unknown"
 
+        self.num_targets = -1
+        self.num_classes = -1
+
         self.X = None
         self.y = None
+        self.perm = None
+
+        # (ytrue, ypredicted) -> metric value
+        self._metric = metric
+        self.metric_name = "?"
 
     def name(self):
         return type(self).__name__
 
-    def is_regression(self):
-        return self.task == Task.REGRESSION
 
-    def is_binary(self):
-        return self.task == Task.BINARY
+    def is_regression(self):
+        raise RuntimeError(f"undef in {self.name()} (subclass order!)")
+
+    def is_classification(self):
+        raise RuntimeError(f"undef in {self.name()} (subclass order!)")
+
+    def is_binary_classification(self):
+        return self.is_classification() and self.num_classes == 2
 
     def is_multiclass(self):
-        return self.task == Task.MULTICLASS
+        return self.is_classification() and self.num_classes > 2
 
-    def are_X_y_set(self):
-        return self.X is not None and self.y is not None
+    def is_multitarget_regression(self):
+        return self.is_regression() and self.num_targets > 1
 
-    def load_dataset(self):  # populate X, y
+    def _metric_transform_y(self):
+        # return self.y > 0.0
+        return self.y
+
+    def _at_predict(self, at):
+        # return at.predict(self.X)
+        raise RuntimeError("define in subclass")
+
+    def _clf_predict(self, clf):
+        # return clf.predict(self.X)
+        raise RuntimeError("define in subclass")
+
+
+    def is_data_loaded(self):
+        return self.X is not None and self.y is not None and self.perm is not None
+
+    def load_dataset(self):  # populate X, y, and perm
         if self.X is None or self.y is None:
-            raise RuntimeError("override this and call after loading X and y")
+            raise RuntimeError("override this and call after setting self.X and self.y")
         N = self.X.shape[0]
 
         rng = np.random.default_rng(self.seed)
         self.perm = rng.permutation(N)
 
-    def train_and_test_set(self, fold_index):
-        dtrain, dtest = self.train_and_test_fold(fold_index)
+    def train_and_test_set(self, fold_index_or_fraction, nfolds=None):
+        dtrain, dtest = self.split(fold_index_or_fraction, nfolds)
         return dtrain.X, dtrain.y, dtest.X, dtest.y
 
-    def train_and_test_fold(self, fold_index, nfolds=None):
-        fold = Fold(self, fold_index, nfolds=nfolds)
+    def train_and_test_fold(self, fold_index, nfolds):
+        return self.split(fold_index, nfolds)
 
-        mro = tuple(
-            set(type(self).__mro__).intersection(
-                {
-                    RegressionMixin,
-                    BinaryMixin,
-                    MulticlassMixin,
-                    BinaryToRegMixin,
-                    Dataset,
-                }
+    def split(self, fold_index_or_fraction, nfolds=None):
+        assert self.is_data_loaded()
+
+        if isinstance(fold_index_or_fraction, float):
+            assert nfolds is None, "fractional DataSplit does not take nfolds arg"
+            fraction = fold_index_or_fraction
+            self.test_fraction = fraction
+            test_end = int(np.round(fraction * self.perm.shape[0]))
+            self.perm_test = self.perm[:test_end]
+            self.perm_train = self.perm[test_end:]
+
+        else:
+            fold_index = fold_index_or_fraction
+            assert nfolds is not None, "fold DataSplit without nfolds"
+            assert isinstance(fold_index, int), "fold_index must be int"
+            assert isinstance(nfolds, int), "fold_index must be int"
+            if fold_index >= nfolds or fold_index < 0:
+                raise IndexError(f"Invalid fold index: {fold_index} / {nfolds}")
+
+            fold_size = self.perm.shape[0] / nfolds
+            test_start = int(fold_index * fold_size)
+            test_end = int((fold_index + 1) * fold_size)
+
+            self.fold_index = fold_index
+            self.perm_test = self.perm[test_start:test_end]
+            self.perm_train = np.hstack(
+                (self.perm[:test_start], self.perm[test_end:])
             )
-        )
-        assert type(self) not in mro
 
-        # Create subtype to ensure presence of relevant mixin
-        train_fold_type = type(
-            f"{self.name()}_TrnFold{fold_index}", (TrainFold,) + mro, {}
-        )
-        train_fold = train_fold_type(fold)
+        dtrain = copy.copy(self)
+        dtest = copy.copy(self)
 
-        test_fold_type = type(
-            f"{self.name()}_TstFold{fold_index}", (TestFold,) + mro, {}
-        )
-        test_fold = test_fold_type(fold)
+        # These should be shallow copies:
+        assert self.X is dtrain.X
+        assert self.X is dtest.X
 
-        for f in self.task_fields():
-            setattr(train_fold, f, getattr(self, f))
-            setattr(test_fold, f, getattr(self, f))
+        dtrain.X = self.X.loc[self.perm_train, :]
+        dtrain.y = self.y.loc[self.perm_train]
+        dtrain.perm = self.perm_train
 
-        return train_fold, test_fold
+        dtest.X = self.X.loc[self.perm_test, :]
+        dtest.y = self.y.loc[self.perm_test]
+        dtest.perm = self.perm_test
+
+        return dtrain, dtest
 
     def astype(self, dtype):
         self.X = self.X.astype(dtype)
@@ -132,6 +169,11 @@ class Dataset:
                 print(f"loading {name} with fetch_openml")
             X, y = fetch_openml(data_id=data_id, return_X_y=True, as_frame=True)
             X, y = self._transform_X_y(X, y)
+            #for k in X.columns:
+            #    print(k)
+            #    print(X[k].unique())
+            #    print()
+            #print(y.unique())
             X, y = self._cast_X_y(X, y)
             self.store_hdf5(X, y)
         else:
@@ -181,14 +223,18 @@ class Dataset:
         return X, y
 
     def _cast_X_y(self, X, y):
-        from sklearn.preprocessing import OrdinalEncoder
-
-        if self.task != Task.REGRESSION and not np.isreal(y[0]):
-            self.target_encoder = OrdinalEncoder(dtype=DTYPE)
-            y = self.target_encoder.fit_transform(y.to_numpy().reshape(-1, 1))
-            return X.astype(DTYPE), pd.Series(y.ravel())
+        if self.is_classification():
+            return X.astype(DTYPE), y.astype(int)
         else:
             return X.astype(DTYPE), y.astype(DTYPE)
+        #from sklearn.preprocessing import OrdinalEncoder
+
+        #if self.task != Task.REGRESSION and not np.isreal(y[0]):
+        #    self.target_encoder = OrdinalEncoder(dtype=DTYPE)
+        #    y = self.target_encoder.fit_transform(y.to_numpy().reshape(-1, 1))
+        #    return X.astype(DTYPE), pd.Series(y.ravel())
+        #else:
+        #    return X.astype(DTYPE), y.astype(DTYPE)
 
     def minmax_normalize(self):
         if self.X is None:
@@ -259,10 +305,6 @@ class Dataset:
             yield params
 
     def train(self, model_class, params):
-        if not isinstance(self, TrainFold):
-            raise RuntimeError(
-                "train on a TrainFold " "(use `Dataset.train_and_test_fold()`)"
-            )
         train_time = time.time()
         clf = model_class(**params)
         clf.fit(self.X, self.y)
@@ -283,22 +325,23 @@ class Dataset:
             VERITAS_EXISTS = False
 
         if len(args) == 1:
-            ytrue = self.y
+            ytrue = self._metric_transform_y()
             (ypred_or_clf,) = args
             if isinstance(ypred_or_clf, np.ndarray):
                 ypred = ypred_or_clf
             elif VERITAS_EXISTS and isinstance(ypred_or_clf, veritas.AddTree):
                 at = ypred_or_clf
-                if self.is_binary():
-                    ypred = at.predict(self.X) > 0.5
-                elif self.is_regression():
-                    ypred = at.predict(self.X)
-                else:
-                    ypred = np.argmax(at.predict(self.X), axis=1)
+                ypred = self._at_predict(at)
+                #if self.is_binary():
+                #    ypred = at.predict(self.X) > 0.5
+                #elif self.is_regression():
+                #    ypred = at.predict(self.X)
+                #else:
+                #    ypred = np.argmax(at.predict(self.X), axis=1)
             else:
                 clf = ypred_or_clf
                 try:
-                    ypred = clf.predict(self.X)
+                    ypred = self._clf_predict(clf)
                 except AttributeError:
                     raise ValueError("metric(ypred:np.ndarray) or metric(clf)")
         elif len(args) == 2:
@@ -308,165 +351,12 @@ class Dataset:
         return self._metric(ytrue, ypred)
 
 
-class Fold:
-    def __init__(self, dataset, fold_index, nfolds=None):
-        if not isinstance(dataset, Dataset):
-            raise ValueError("Not a dataset")
+class ClassificationMixin:
+    def is_classification(self):
+        return True
 
-        self.nfolds = nfolds
-        if self.nfolds is None:
-            self.nfolds = dataset.nfolds
-
-        if fold_index >= self.nfolds or fold_index < 0:
-            raise IndexError(f"Invalid fold index: {fold_index} / {self.nfolds}")
-
-        self.dataset = dataset
-        self.fold_index = fold_index
-
-        fold_size = dataset.perm.shape[0] / self.nfolds
-        test_start = int(fold_index * fold_size)
-        test_end = int((fold_index + 1) * fold_size)
-
-        self.perm_test = dataset.perm[test_start:test_end]
-        self.perm_train = np.hstack(
-            (dataset.perm[:test_start], dataset.perm[test_end:])
-        )
-
-        self.Xtrain = dataset.X.loc[self.perm_train, :]
-        self.ytrain = dataset.y.loc[self.perm_train]
-        self.Xtest = dataset.X.loc[self.perm_test, :]
-        self.ytest = dataset.y.loc[self.perm_test]
-
-
-class TrainFold:
-    def __init__(self, fold):
-        self.parent = fold.dataset
-        self.fold = fold
-
-        # Dataset __init__
-        super().__init__(
-            self.parent.task, nfolds=fold.nfolds - 1, seed=self.parent.seed
-        )
-
-        # should set fields as `DataSet.load_dataset`
-
-        self.perm = fold.perm_train
-        self.X = fold.Xtrain
-        self.y = fold.ytrain
-
-    def load_dataset(self):
-        raise RuntimeError("Cannot load TrainFold")
-
-
-class TestFold:
-    def __init__(self, fold):
-        self.parent = fold.dataset
-        self.fold = fold
-
-        # Dataset __init__
-        super().__init__(self.parent.task, nfolds=1, seed=self.parent.seed)
-
-        self.perm = fold.perm_test
-        self.X = fold.Xtest
-        self.y = fold.ytest
-
-    def load_dataset(self):
-        raise RuntimeError("Cannot load TestFold")
-
-
-class RegressionMixin:
-    def to_binary(self, frac_positive=0.5, right=False):
-        return self.to_multiclass([frac_positive], right)
-
-    def to_multiclass(self, quantiles, right=False):
-        assert self.are_X_y_set()
-        quantiles = np.quantile(self.y, quantiles)
-        y = np.digitize(self.y, quantiles, right=right)
-        y = y.astype(DTYPE)
-
-        num_classes = len(quantiles) + 1
-        binary = num_classes == 2
-        sup = (Dataset, BinaryMixin) if binary else (Dataset, MulticlassMixin)
-        suffix = "BinClf" if binary else f"MultClf{num_classes}"
-        task = Task.BINARY if binary else Task.MULTICLASS
-        name = self.name() + suffix
-
-        cls = type(name, sup, {})
-        d = cls(task, nfolds=self.nfolds, seed=self.seed)
-        d.num_classes = num_classes
-        d.class_edges = quantiles
-        d.regression = self
-
-        # Simulate load dataset
-        # This needs to set the same fields as Dataset.load_dataset!
-        d.X = self.X
-        d.y = pd.Series(y)
-        d.perm = self.perm
-
-        return d
-
-    def _metric(self, ytrue, ypred):  # lower is better
-        from sklearn.metrics import root_mean_squared_error
-
-        return root_mean_squared_error(ytrue, ypred)
-
-    def metric_name(self):
-        return "rmse"
-
-    def get_model_class(self, model_type):
-        if model_type == "xgb":
-            import xgboost as xgb
-
-            return xgb.XGBRegressor
-
-        if model_type == "rf":
-            import sklearn.ensemble
-
-            return sklearn.ensemble.RandomForestRegressor
-
-        if model_type == "lgb":
-            import lightgbm as lgb
-
-            return lgb.LGBMRegressor
-
-        raise ValueError(f"Unknown model_type {model_type}")
-
-    def task_fields(self):
-        return []
-
-
-class BinaryMixin:
-    def to_regression(self, neg_value = -1.0, pos_value = +1.0, threshold=0.0):
-        assert self.are_X_y_set()
-        y = (self.y == 0.0) * neg_value + (self.y == 1.0) * pos_value
-        y = y.astype(DTYPE)
-        sup = (Dataset, BinaryToRegMixin)
-        suffix = "ToReg"
-        task = Task.REGRESSION
-        name = self.name() + suffix
-
-        cls = type(name, sup, {})
-        d = cls(task, nfolds=self.nfolds, seed=self.seed)
-        d.neg_value = neg_value
-        d.pos_value = pos_value
-        d.threshold = threshold
-        d.binary = self
-
-        # Simulate load dataset
-        # This needs to set the same fields as Dataset.load_dataset!
-        d.X = self.X
-        d.y = y
-        d.perm = self.perm
-
-        return d
-
-    def _metric(self, ytrue, ypred):  # higher is better
-        from sklearn.metrics import accuracy_score
-
-        return accuracy_score(ytrue, ypred)
-
-    def metric_name(self):
-        return "accuracy"
+    def is_regression(self):
+        return False
 
     def get_model_class(self, model_type):
         if model_type == "xgb":
@@ -486,8 +376,49 @@ class BinaryMixin:
 
         raise ValueError(f"Unknown model_type {model_type}")
 
-    def task_fields(self):
-        return []
+    def use_balanced_accuracy(self):
+        self._metric = balanced_accuracy_score
+        self.metric_name = "balanced_accuracy"
+
+    def as_regression_problem(self):
+        assert self.is_data_loaded()
+
+        suffix = "AsReg"
+        name = self.name() + suffix
+
+        if self.num_classes > 2:
+            cls = type(name, (MulticlassAsMTRegr,), {})
+            d = cls(self.num_classes, seed=self.seed, silent=self.silent)
+            enc = OneHotEncoder(sparse_output=False, dtype=DTYPE)
+            y = pd.DataFrame(enc.fit_transform(self.y.values.reshape(-1, 1)) * 2.0 - 1.0)
+        else:
+            cls = type(name, (BinaryAsRegr,), {})
+            d = cls(seed=self.seed, silent=self.silent)
+            y = pd.Series((self.y.values * 2.0 - 1.0).astype(DTYPE))
+
+        # Simulate load dataset
+        # This needs to set the same fields as Dataset.load_dataset!
+        d.X = self.X
+        d.y = y
+        d.perm = self.perm
+
+        d.classification = self
+
+        return d
+
+
+class Binary(ClassificationMixin, Dataset):
+    def __init__(self, seed=SEED, silent=False):
+        super().__init__(accuracy_score, seed, silent)
+        self.threshold = 0.5
+        self.num_classes = 2
+        self.metric_name = "accuracy"
+
+    def _at_predict(self, at):
+        return at.predict(self.X) > self.threshold
+
+    def _clf_predict(self, clf):
+        return clf.predict_proba(self.X)[:, 1] > self.threshold
 
 
 class MulticlassMixin:
@@ -550,9 +481,8 @@ class MulticlassMixin:
     def to_binary(self, suffix, class1_predicate, mask=None):
         assert self.is_multiclass()
 
-        task = Task.BINARY
-        cls = type(f"{self.name()}{suffix}", (Dataset, BinaryMixin), {})
-        d = cls(task, nfolds=self.nfolds, seed=self.seed)
+        cls = type(f"{self.name()}{suffix}", (Binary,), {})
+        d = cls(seed=self.seed, silent=self.silent)
         d.multiclass = self
         d.mask = mask
 
@@ -571,43 +501,55 @@ class MulticlassMixin:
 
         return d
 
-    def _metric(self, ytrue, ypred):  # higher is better
-        from sklearn.metrics import accuracy_score
 
-        return accuracy_score(ytrue, ypred)
+class Multiclass(ClassificationMixin, MulticlassMixin, Dataset):
+    def __init__(self, num_classes, seed=SEED, silent=False):
+        super().__init__(accuracy_score, seed, silent)
+        self.num_classes = num_classes
+        self.metric_name = "accuracy"
 
-    def metric_name(self):
-        return "accuracy"
+    def _at_predict(self, at):
+        return np.argmax(at.predict(self.X), axis=1)
 
-    def get_model_class(self, model_type):
-        if model_type == "xgb":
-            import xgboost as xgb
+    def _clf_predict(self, clf):
+        return clf.predict(self.X)
 
-            return xgb.XGBClassifier
 
-        if model_type == "rf":
-            import sklearn.ensemble
+class RegressionMixin:
+    def is_regression(self):
+        return True
 
-            return sklearn.ensemble.RandomForestClassifier
+    def is_classification(self):
+        return False
 
-        if model_type == "lgb":
-            import lightgbm as lgb
+    def to_binary(self, frac_positive=0.5, right=False):
+        return self.to_multiclass([frac_positive], right)
 
-            return lgb.LGBMClassifier
+    def to_multiclass(self, quantiles, right=False):
+        assert self.is_data_loaded()
+        quantiles = np.quantile(self.y, quantiles)
+        y = np.digitize(self.y, quantiles, right=right)
+        y = y.astype(DTYPE)
 
-        raise ValueError(f"Unknown model_type {model_type}")
+        num_classes = len(quantiles) + 1
+        binary = num_classes == 2
+        sup = (Binary,) if binary else (Multiclass,)
+        suffix = "BinClf" if binary else f"MultClf{num_classes}"
+        name = self.name() + suffix
 
-    def task_fields(self):
-        return ["num_classes"]
+        cls = type(name, sup, {})
+        d = cls(seed=self.seed, silent=self.silent)
+        d.num_classes = num_classes
+        d.class_edges = quantiles
+        d.regression = self
 
-class BinaryToRegMixin:
-    def _metric(self, ytrue, ypred):  # higher is better
-        from sklearn.metrics import accuracy_score
+        # Simulate load dataset
+        # This needs to set the same fields as Dataset.load_dataset!
+        d.X = self.X
+        d.y = pd.Series(y)
+        d.perm = self.perm
 
-        return accuracy_score(ytrue > self.threshold, ypred > self.threshold)
-
-    def metric_name(self):
-        return "thresholded_accuracy"
+        return d
 
     def get_model_class(self, model_type):
         if model_type == "xgb":
@@ -628,4 +570,79 @@ class BinaryToRegMixin:
         raise ValueError(f"Unknown model_type {model_type}")
 
     def task_fields(self):
-        return ["neg_value", "pos_value", "threshold"]
+        return []
+
+
+class Regression(RegressionMixin, Dataset):
+    def __init__(self, seed=SEED, silent=False):
+        super().__init__(root_mean_squared_error, seed, silent)
+        self.num_targets = 1
+        self.metric_name = "rmse"
+
+    def _at_predict(self, at):
+        return at.eval(self.X)
+
+    def _clf_predict(self, clf):
+        return clf.predict(self.X)
+
+
+class MultiTargetRegression(RegressionMixin, Dataset):
+    def __init__(self, num_targets, seed=SEED, silent=False):
+        super().__init__(root_mean_squared_error, seed, silent)
+        self.num_targets = num_targets
+        self.metric_name = "rmse"
+
+    def _at_predict(self, at):
+        return at.eval(self.X)
+
+    def _clf_predict(self, clf):
+        return clf.predict(self.X)
+
+    def to_argmax_multiclass(self):
+        suffix = "ArgMaxMulticlass"
+        cls = type(f"{self.name()}{suffix}", (Multiclass,), {})
+        d = cls(self.num_targets, seed=self.seed, silent=self.silent)
+        d.multitarget_regression = self
+
+        # Similate load dataset
+        # This needs to set the same fields as Dataset.load_dataset!
+        d.X = self.X
+        d.y = pd.Series(np.argmax(self.y, axis=1).astype(int))
+        d.perm = self.perm  # reuse permutation
+
+        return d
+
+
+class BinaryAsRegr(RegressionMixin, Dataset):
+    def __init__(self, seed=SEED, silent=False):
+        super().__init__(accuracy_score, seed, silent)
+        self.num_targets = 2
+        self.num_classes = 1
+        self.metric_name = "accuracy"
+        self.threshold = 0.0
+
+    def _metric_transform_y(self):
+        return self.y > 0.0
+
+    def _at_predict(self, at):
+        return at.eval(self.X) > 0.0
+
+    def _clf_predict(self, clf):
+        return clf.predict(self.X) > 0.0
+
+
+class MulticlassAsMTRegr(RegressionMixin, Dataset):
+    def __init__(self, num_classes, seed=SEED, silent=False):
+        super().__init__(accuracy_score, seed, silent)
+        self.num_targets = num_classes
+        self.num_classes = num_classes
+        self.metric_name = "accuracy"
+
+    def _metric_transform_y(self):
+        return np.argmax(self.y, axis=1)
+
+    def _at_predict(self, at):
+        return np.argmax(at.eval(self.X), axis=1)
+
+    def _clf_predict(self, clf):
+        return np.argmax(clf.predict(self.X), axis=1)

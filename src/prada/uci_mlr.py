@@ -1,5 +1,4 @@
-from .dataset import Dataset, MulticlassMixin, RegressionMixin
-from .dataset import Task
+from .dataset import Multiclass
 
 import numpy as np
 import pandas as pd
@@ -40,16 +39,15 @@ UCI_DATASETS = []
 #    return cls
 
 # https://archive.ics.uci.edu/datasets?search=Dry%20Bean%20Dataset
-class DryBean(Dataset, MulticlassMixin):
+class DryBean(Multiclass):
     dataset_name = "Dry_Bean_Dataset.arff"
 
     def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.num_classes = 7
+        super().__init__(7, *args, **kwargs)
 
-    def load_dataset(self):
+    def load_dataset(self, force=False):
         if self.X is None or self.y is None:
-            self.X, self.y = self._load_arff(DryBean.dataset_name)
+            self.X, self.y = self._load_arff(DryBean.dataset_name, force)
             super().load_dataset()
             self.minmax_normalize()
 
@@ -75,18 +73,19 @@ class DryBean(Dataset, MulticlassMixin):
         return X, y
 
 # https://archive.ics.uci.edu/ml/datasets/dataset+for+sensorless+drive+diagnosis
-class SensorlessDriveDiagnosis(Dataset, MulticlassMixin):
+class SensorlessDriveDiagnosis(Multiclass):
     dataset_name = "Sensorless_drive_diagnosis.txt.gz"
 
     def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.num_classes = 11
+        super().__init__(11, *args, **kwargs)
 
-    def load_dataset(self):
+    def load_dataset(self, force=False):
         if self.X is None or self.y is None:
             self.X, self.y = self._load_csv_gz(
-                    SensorlessDriveDiagnosis.dataset_name,
-                    read_csv_kwargs={"sep": " ", "header": None})
+                SensorlessDriveDiagnosis.dataset_name,
+                read_csv_kwargs={"sep": " ", "header": None},
+                force=force
+            )
             super().load_dataset()
             self.minmax_normalize()
 
@@ -101,18 +100,19 @@ class SensorlessDriveDiagnosis(Dataset, MulticlassMixin):
         return X, y
 
 # https://archive.ics.uci.edu/dataset/59/letter+recognition
-class LetterRecognition(Dataset, MulticlassMixin):
+class LetterRecognition(Multiclass):
     dataset_name = "letter-recognition.data.gz"
 
     def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.num_classes = 26
+        super().__init__(26, *args, **kwargs)
 
-    def load_dataset(self):
+    def load_dataset(self, force=False):
         if self.X is None or self.y is None:
             self.X, self.y = self._load_csv_gz(
-                    LetterRecognition.dataset_name,
-                    read_csv_kwargs={"header": None})
+                LetterRecognition.dataset_name,
+                read_csv_kwargs={"header": None},
+                force=force
+            )
             super().load_dataset()
             self.minmax_normalize()
 
@@ -126,18 +126,19 @@ class LetterRecognition(Dataset, MulticlassMixin):
         return X, y
 
 # https://archive.ics.uci.edu/dataset/81/pen+based+recognition+of+handwritten+digits
-class PenDigits(Dataset, MulticlassMixin):
+class PenDigits(Multiclass):
     dataset_name = "pendigits.csv.gz"
 
     def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.num_classes = 10
+        super().__init__(10, *args, **kwargs)
 
-    def load_dataset(self):
+    def load_dataset(self, force=False):
         if self.X is None or self.y is None:
             self.X, self.y = self._load_csv_gz(
-                    PenDigits.dataset_name,
-                    read_csv_kwargs={"header": None})
+                PenDigits.dataset_name,
+                read_csv_kwargs={"header": None},
+                force=force
+            )
             super().load_dataset()
             self.minmax_normalize()
 

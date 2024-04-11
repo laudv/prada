@@ -1,5 +1,4 @@
-from .dataset import Dataset, Task
-from .dataset import MulticlassMixin, RegressionMixin, BinaryMixin
+from .dataset import Binary, Multiclass, Regression
 
 import numpy as np
 import pandas as pd
@@ -8,26 +7,19 @@ OPENML_DATASETS = []
 
 # https://huggingface.co/datasets/inria-soda/tabular-benchmark
 
-def _create_openml(name, openml_id, task, fields, transform_y=None):
-    if task == Task.MULTICLASS:
-        sup = (Dataset, MulticlassMixin)
-    elif task == Task.REGRESSION:
-        sup = (Dataset, RegressionMixin)
-    else:
-        sup = (Dataset, BinaryMixin)
+def _create_openml(name, openml_id, base, fields, transform_y=None):
+    sup = (base,)
     cls = type(name, sup, {})
 
     def __init__(self, *args, **kwargs):
-        super(cls, self).__init__(task, *args, **kwargs)
+        super(cls, self).__init__(*args, **(fields | kwargs))
         self.source = "openml"
         self.openml_id = openml_id
         self.url = f"https://www.openml.org/d/{openml_id}"
-        for k, v in fields.items():
-            setattr(self, k, v)
 
-    def load_dataset(self):
+    def load_dataset(self, force=False):
         if self.X is None or self.y is None:
-            self.X, self.y = self._load_openml(self.name(), self.openml_id)
+            self.X, self.y = self._load_openml(self.name(), self.openml_id, force=force)
             super(cls, self).load_dataset()
 
     def _transform_X_y(self, X, y):
@@ -91,20 +83,20 @@ for tup in [
     else:
         name, openml_id, transform_y = tup
 
-    cls = _create_openml(name, openml_id, Task.REGRESSION, {}, transform_y)
+    cls = _create_openml(name, openml_id, Regression, {}, transform_y)
     globals()[name] = cls
 
 # -- BINARY ------------------------------------------------------------------ #
 for tup in [
         # Tabular benchmark versions
-        ("Electricity",      44156),
+        ("Electricity",      44156, lambda y: y=="UP"),
         ("CovtypeNumeric",   44121),
         ("Covtype",          44159),
         #("Pol",              44122), REGRESSION
-        ("MagicTelescope",   44125),
+        ("MagicTelescope",   44125, lambda y: y=="g"),  # gamma (signal) vs background
         ("BankMarketing",    44126),
         ("Bioresponse",      45019),
-        ("MiniBooNE",        44128),
+        ("MiniBooNE",        44128, lambda y: y=="True"),
         ("DefaultCreditCardClients", 45036),
         ("HiggsBig",         44129),
         ("EyeMovements",     44157),
@@ -118,18 +110,18 @@ for tup in [
         ("RoadSafety",       45038),
 
         # Other OpenML
-        ("AtlasHiggs",       45549),
-        ("SantanderCustomerSatisfaction", 45566),
+        ("AtlasHiggs",       45549, lambda y: y=="s"),  # signal vs background
+        ("SantanderCustomerSatisfaction", 45566, lambda y: y=="True"),
         #("VehicleSensIt",    357),  # http://www.csie.ntu.edu.tw/~cjlin/libsvmtools/datasets
         #("Prostate",         45672), # https://github.com/slds-lmu/paper_2023_ci_for_ge
         # https://archive.ics.uci.edu/ml/datasets/Census-Income+(KDD)
-        ("CensusIncomeKDD",  42750),
-        ("BreastCancer", 15, lambda y: y=="malignant"),
-        ("Vehicle", 54, lambda y: (y == "bus") | (y == "van")),
-        ("Spambase", 44, lambda y: (y == "1")),
-        ("Phoneme", 1489, lambda y: (y == "1")),
-        ("Nomao", 45078, lambda y: (y == 2.0)),
-        ("Banknote", 1462, lambda y: (y == "1")),
+        #("CensusIncomeKDD",  42750, lambda y: y=="' 50000+.'"),
+        ("BreastCancer",     15,    lambda y: y=="malignant"),
+        ("Vehicle",          54,    lambda y: (y == "bus") | (y == "van")),
+        ("Spambase",         44,    lambda y: y == "1"),
+        ("Phoneme",          1489,  lambda y: y == "1"),
+        ("Nomao",            45078, lambda y: y == 2.0),
+        ("Banknote",         1462,  lambda y: y == "1"),
     ]:
 
     if len(tup) == 2:
@@ -137,7 +129,7 @@ for tup in [
         transform_y = None
     else:
         name, openml_id, transform_y = tup
-    cls = _create_openml(name, openml_id, Task.BINARY, {}, transform_y)
+    cls = _create_openml(name, openml_id, Binary, {}, transform_y)
     globals()[name] = cls
 
 # -- MULTICLASS -------------------------------------------------------------- #
@@ -162,7 +154,7 @@ for name, openml_id, num_classes in [
         ("Volkert", 41166, 10), # https://competitions.codalab.org/competitions/2321
     ]:
     fields = {"num_classes": num_classes}
-    cls = _create_openml(name, openml_id, Task.MULTICLASS, fields)
+    cls = _create_openml(name, openml_id, Multiclass, fields)
     globals()[name] = cls
 
 
@@ -186,7 +178,7 @@ def _Adult_transform_X_y(self, X, y):
     print(X, X.dtypes)
     print(y, y.dtype)
     return X, y
-Adult = _create_openml("Adult", 179, Task.BINARY, {})
+Adult = _create_openml("Adult", 179, Binary, {})
 setattr(Adult, "_transform_X_y", _Adult_transform_X_y)
 
 def _KddCup99_transform_X_y(self, X, y):
@@ -201,7 +193,7 @@ def _KddCup99_transform_X_y(self, X, y):
     X.drop(inplace=True, columns=["service", "flag", "land", "urgent"])
     y = (y=="normal")
     return X, y
-KddCup99 = _create_openml("KddCup99", 1113, Task.BINARY, {})
+KddCup99 = _create_openml("KddCup99", 1113, Binary, {})
 setattr(KddCup99, "_transform_X_y", _KddCup99_transform_X_y)
 
 def _AmesHousing_transform_X_y(self, X, y):
@@ -227,5 +219,5 @@ def _AmesHousing_transform_X_y(self, X, y):
     XX.dropna(inplace=True)
     y = np.log(y)
     return XX, y
-AmesHousing = _create_openml("AmesHousing", 42165, Task.REGRESSION, {})
+AmesHousing = _create_openml("AmesHousing", 42165, Regression, {})
 setattr(AmesHousing, "_transform_X_y", _AmesHousing_transform_X_y)

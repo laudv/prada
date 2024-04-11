@@ -10,26 +10,30 @@ from .libsvm import *
 from .blocksworld import *
 
 
-ALL_DATASETS = [cls for cls in Dataset.__subclasses__()]
-ALL_DATASET_NAMES = [cls.__name__ for cls in ALL_DATASETS]
-
-ALL_REGRESSION = [cls for cls in ALL_DATASETS if issubclass(cls, RegressionMixin)]
+ALL_REGRESSION = [cls for cls in Regression.__subclasses__()]
 ALL_REGRESSION_NAMES = [cls.__name__ for cls in ALL_REGRESSION]
 
-ALL_BINARY = [cls for cls in ALL_DATASETS if issubclass(cls, BinaryMixin)]
+ALL_BINARY = [cls for cls in Binary.__subclasses__()]
 ALL_BINARY_NAMES = [cls.__name__ for cls in ALL_BINARY]
 
-ALL_MULTICLASS = [cls for cls in ALL_DATASETS if issubclass(cls, MulticlassMixin)]
+ALL_MULTICLASS = [cls for cls in Multiclass.__subclasses__()]
 ALL_MULTICLASS_NAMES = [cls.__name__ for cls in ALL_MULTICLASS]
+
+ALL_MULTITARGET_REGR = [cls for cls in MultiTargetRegression.__subclasses__()]
+ALL_MULTITARGET_REGR_NAMES = [cls.__name__ for cls in ALL_MULTITARGET_REGR]
+
+ALL_DATASETS = ALL_REGRESSION + ALL_BINARY + ALL_MULTICLASS + ALL_MULTITARGET_REGR
+ALL_DATASET_NAMES = [cls.__name__ for cls in ALL_DATASETS]
+
 
 
 def _get_dname_suggestion(dname):
-        from difflib import SequenceMatcher
-        import numpy as np
+    from difflib import SequenceMatcher
+    import numpy as np
 
-        distances = [SequenceMatcher(None, dname, sugg).ratio()
-                     for sugg in ALL_DATASET_NAMES]
-        return ALL_DATASET_NAMES[np.argmax(distances)]
+    distances = [SequenceMatcher(None, dname, sugg).ratio()
+                 for sugg in ALL_DATASET_NAMES]
+    return ALL_DATASET_NAMES[np.argmax(distances)]
 
 def parse_dataset_name(dname_and_options):
     try:
@@ -92,6 +96,7 @@ def get_dataset(dname_and_options, *args, **kwargs):
         print("REGRESSION: ", ", ".join(ALL_REGRESSION_NAMES), end="\n\n")
         print("BINARY: ", ", ".join(ALL_BINARY_NAMES), end="\n\n")
         print("MULTICLASS: ", ", ".join(ALL_MULTICLASS_NAMES), end="\n\n")
+        print("MULTITARGET_REGR: ", ", ".join(ALL_MULTITARGET_REGR_NAMES), end="\n\n")
         print("----------------------------------------")
 
         raise ValueError(f"Invalid dataset `{dname}`. Did you mean {dname_suggestion}?")
