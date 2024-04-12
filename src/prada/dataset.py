@@ -51,7 +51,7 @@ class Dataset:
     def is_classification(self):
         raise RuntimeError(f"undef in {self.name()} (subclass order!)")
 
-    def is_binary_classification(self):
+    def is_binary(self):
         return self.is_classification() and self.num_classes == 2
 
     def is_multiclass(self):
@@ -351,7 +351,13 @@ class Dataset:
         return self._metric(ytrue, ypred)
 
 
-class ClassificationMixin:
+class BalancedAccuracyMixin:
+    def use_balanced_accuracy(self):
+        self._metric = balanced_accuracy_score
+        self.metric_name = "balanced_accuracy"
+
+
+class ClassificationMixin(BalancedAccuracyMixin):
     def is_classification(self):
         return True
 
@@ -374,11 +380,12 @@ class ClassificationMixin:
 
             return lgb.LGBMClassifier
 
-        raise ValueError(f"Unknown model_type {model_type}")
+        if model_type == "dt":
+            import sklearn.tree
 
-    def use_balanced_accuracy(self):
-        self._metric = balanced_accuracy_score
-        self.metric_name = "balanced_accuracy"
+            return sklearn.tree.DecisionTreeClassifier
+
+        raise ValueError(f"Unknown model_type {model_type}")
 
     def as_regression_problem(self):
         assert self.is_data_loaded()
@@ -567,6 +574,11 @@ class RegressionMixin:
 
             return lgb.LGBMRegressor
 
+        if model_type == "dt":
+            import sklearn.tree
+
+            return sklearn.tree.DecisionTreeRegressor
+
         raise ValueError(f"Unknown model_type {model_type}")
 
     def task_fields(self):
@@ -613,7 +625,7 @@ class MultiTargetRegression(RegressionMixin, Dataset):
         return d
 
 
-class BinaryAsRegr(RegressionMixin, Dataset):
+class BinaryAsRegr(RegressionMixin, BalancedAccuracyMixin, Dataset):
     def __init__(self, seed=SEED, silent=False):
         super().__init__(accuracy_score, seed, silent)
         self.num_targets = 2
@@ -631,7 +643,7 @@ class BinaryAsRegr(RegressionMixin, Dataset):
         return clf.predict(self.X) > 0.0
 
 
-class MulticlassAsMTRegr(RegressionMixin, Dataset):
+class MulticlassAsMTRegr(RegressionMixin, BalancedAccuracyMixin, Dataset):
     def __init__(self, num_classes, seed=SEED, silent=False):
         super().__init__(accuracy_score, seed, silent)
         self.num_targets = num_classes
