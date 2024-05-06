@@ -91,10 +91,10 @@ for tup in [
         # Tabular benchmark versions
         ("Electricity",      44156, lambda y: y=="UP"),
         ("CovtypeNumeric",   44121),
-        ("Covtype",          44159),
+        ("Covtype",          44159, lambda y: y.astype(int)==2),
         #("Pol",              44122), REGRESSION
         ("MagicTelescope",   44125, lambda y: y=="g"),  # gamma (signal) vs background
-        ("BankMarketing",    44126),
+        ("BankMarketing",    44126, lambda y: y=="2"),
         ("Bioresponse",      45019),
         ("MiniBooNE",        44128, lambda y: y=="True"),
         ("DefaultCreditCardClients", 45036),
