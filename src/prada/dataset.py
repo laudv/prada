@@ -592,7 +592,7 @@ class Regression(RegressionMixin, Dataset):
         self.metric_name = "rmse"
 
     def _at_predict(self, at):
-        return at.eval(self.X)
+        return at.predict(self.X)
 
     def _clf_predict(self, clf):
         return clf.predict(self.X)
