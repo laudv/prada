@@ -180,13 +180,20 @@ class Dataset:
             X, y = self.load_hdf5()
         return X, y
 
-    def _load_arff(self, name, force=False):
+    def _load_arff(self, name, force=False, url=None):
         from scipy.io.arff import loadarff
 
         if not self.hdf5_exists() or force:
+            path = os.path.join(self.data_dir, name)
+            if not os.path.exists(path) and url is not None:
+                # download the dataset file from given url 
+                from urllib.request import urlretrieve
+                if not self.silent:
+                    print(f"downloading {name} from {url}")
+                urlretrieve(url, path)
             if not self.silent:
                 print(f"loading {name} from arff file")
-            data = loadarff(os.path.join(self.data_dir, name))
+            data = loadarff(path)
             X, y = self._transform_X_y(data, None)
             X, y = self._cast_X_y(X, y)
             self.store_hdf5(X, y)

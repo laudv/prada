@@ -5,6 +5,8 @@ from .dataset import *
 
 from .openml import *
 from .other import *
+from .folktables import *
+from .aif360 import *
 from .uci_mlr import *
 from .libsvm import *
 from .blocksworld import *

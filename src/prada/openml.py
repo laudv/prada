@@ -221,3 +221,23 @@ def _AmesHousing_transform_X_y(self, X, y):
     return XX, y
 AmesHousing = _create_openml("AmesHousing", 42165, Regression, {})
 setattr(AmesHousing, "_transform_X_y", _AmesHousing_transform_X_y)
+
+# BankMarketingFull: alternative to the main version with broader feature set 
+#  --> for fairness, TabBenchmark version doesn't have protected attribute "marital"
+def _BankMarketingFull_transform_X_y(self, X, y):
+    y = (X["deposit"] == "yes")
+    X["married"] = (X["marital"] == "married")
+    edu_map = {"unknown": 0, "primary": 0, "secondary": 1, "tertiary": 2}
+    X["education"] = X["education"].map(edu_map)
+    X["default"] = (X["default"] == "yes")
+    X["housing"] = (X["housing"] == "yes")
+    X["loan"] = (X["loan"] == "yes")
+    X["age_young_old"] = (X["age"] < 25) | (X["age"] > 60)
+    month_map = {"jan":1,"feb":2,"mar":3,"apr":4,"may":5,"jun":6,
+                 "jul":7,"aug":8,"sep":9,"oct":10,"nov":11,"dec":12}
+    X["month"] = X["month"].map(month_map)
+    X = pd.get_dummies(X, columns=["job", "contact", "poutcome"], drop_first=True)
+    X.drop(columns=["age", "marital", "deposit"], inplace=True)
+    return X, y
+BankMarketingFull = _create_openml("BankMarketingFull", 43718, Binary, {})
+setattr(BankMarketingFull, "_transform_X_y", _BankMarketingFull_transform_X_y)
